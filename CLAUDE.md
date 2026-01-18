@@ -44,12 +44,23 @@ PRISM Diagnostics is a behavioral geometry engine for industrial signal topology
 ```
 prism-engines/diagnostics/
 ├── prism/                      # Core package
+│   ├── core/                   # Types and utilities
+│   │   ├── domain_clock.py     # DomainClock, DomainInfo, auto_detect_window
+│   │   └── signals/            # Signal types (DenseSignal, SparseSignal, LaplaceField)
+│   │
 │   ├── db/                     # Parquet I/O layer
+│   │
 │   ├── engines/                # 33 computation engines
+│   │   ├── vector/             # Intrinsic metrics (hurst, entropy, garch, etc.)
+│   │   ├── geometry/           # Structural (pca, mst, clustering, coupling, modes)
+│   │   ├── state/              # Temporal dynamics (granger, dtw, trajectory, etc.)
+│   │   ├── laplace/            # Laplace transform and pairwise
+│   │   ├── spectral/           # Wavelet microscope
+│   │   ├── pointwise/          # Derivatives, hilbert, statistical
+│   │   └── observation/        # Break detector, heaviside, dirac
+│   │
 │   ├── entry_points/           # CLI entrypoints (python -m prism.entry_points.*)
-│   ├── modules/                # Reusable computation modules
 │   ├── cohorts/                # Cohort definitions
-│   ├── state/                  # State tracking
 │   └── utils/                  # Utilities (including monitor.py)
 │
 ├── fetchers/                   # Data fetchers (16 total)
