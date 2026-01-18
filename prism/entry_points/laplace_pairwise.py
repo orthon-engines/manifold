@@ -1,0 +1,318 @@
+"""
+PRISM Laplace Pairwise Geometry (Vectorized)
+============================================
+
+Polars-native pairwise computation on Laplace field vectors.
+No Python loops. Self-join + parallel computation.
+"""
+
+import polars as pl
+from pathlib import Path
+from datetime import datetime
+import logging
+
+from prism.db.parquet_store import ensure_directories, get_parquet_path
+from prism.db.polars_io import write_parquet_atomic, get_file_size_mb
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Hardcoded window configuration (from stride.yaml)
+WINDOW_CONFIG = {
+    'anchor': {'window_days': 252, 'stride_days': 21, 'weight': 4.0},
+    'bridge': {'window_days': 126, 'stride_days': 5, 'weight': 2.0},
+    'scout':  {'window_days': 63,  'stride_days': 5, 'weight': 1.0},
+    'micro':  {'window_days': 21,  'stride_days': 1, 'weight': 0.5},
+}
+
+DEFAULT_TIERS = ['anchor', 'bridge']
+DRILLDOWN_TIERS = ['scout', 'micro']
+
+
+def extract_cohort_from_indicator(indicator_id: str) -> str:
+    """Extract cohort from indicator_id (e.g., CMAPSS_BPR_FD001_U001 -> FD001_U001)."""
+    parts = indicator_id.split('_')
+    if len(parts) >= 4:
+        return '_'.join(parts[-2:])
+    return indicator_id
+
+
+def run_laplace_pairwise_vectorized(
+    cohort_filter: str = None,
+    chunk_size: int = 50_000,
+) -> dict:
+    """
+    Vectorized pairwise geometry on Laplace field data.
+
+    Uses Polars self-join instead of Python loops.
+    """
+
+    ensure_directories()
+
+    # Load Laplace field data
+    path = get_parquet_path('vector', 'indicator_field')
+    if not Path(path).exists():
+        raise FileNotFoundError(f"Run laplace.py first: {path}")
+
+    # Use lazy scan for large files (> 500 MB)
+    file_size_mb = get_file_size_mb(path)
+    logger.info(f"Loading {path} ({file_size_mb:.0f} MB)")
+
+    if file_size_mb > 500:
+        logger.info("  Using lazy scan (large file)")
+        laplace = pl.scan_parquet(path).collect()
+    else:
+        laplace = pl.read_parquet(path)
+    logger.info(f"Loaded {len(laplace):,} rows")
+
+    # Add cohort column derived from indicator_id
+    laplace = laplace.with_columns(
+        pl.col('indicator_id').map_elements(extract_cohort_from_indicator, return_dtype=pl.Utf8).alias('cohort')
+    )
+
+    # Filter cohort if specified
+    if cohort_filter:
+        laplace = laplace.filter(pl.col('cohort') == cohort_filter)
+        logger.info(f"Filtered to cohort {cohort_filter}: {len(laplace):,} rows")
+
+    # Get unique cohorts
+    cohorts = laplace['cohort'].unique().to_list()
+    logger.info(f"Processing {len(cohorts)} cohorts")
+
+    all_results = []
+
+    for cohort in cohorts:
+        logger.info(f"[{cohort}] Starting...")
+        t0 = datetime.now()
+
+        # Filter to this cohort
+        cohort_data = laplace.filter(pl.col('cohort') == cohort)
+
+        # Aggregate to indicator-level (mean across windows and engines)
+        indicator_agg = (
+            cohort_data
+            .group_by('indicator_id')
+            .agg([
+                pl.col('gradient_mean').mean().alias('gradient'),
+                pl.col('laplacian_mean').mean().alias('laplacian'),
+                pl.col('divergence').mean().alias('divergence'),
+                pl.col('field_potential').mean().alias('field_potential'),
+                pl.col('cohort').first().alias('cohort'),
+            ])
+        )
+
+        n_indicators = len(indicator_agg)
+        n_pairs = n_indicators * (n_indicators - 1) // 2
+        logger.info(f"[{cohort}] {n_indicators} indicators → {n_pairs:,} pairs")
+
+        if n_indicators < 2:
+            continue
+
+        # Self-join for all pairs
+        pairwise = (
+            indicator_agg
+            .join(indicator_agg, how='cross', suffix='_b')
+            .filter(pl.col('indicator_id') < pl.col('indicator_id_b'))
+            .with_columns([
+                # Euclidean distance in field space
+                (
+                    (pl.col('gradient') - pl.col('gradient_b')).pow(2) +
+                    (pl.col('laplacian') - pl.col('laplacian_b')).pow(2) +
+                    (pl.col('divergence') - pl.col('divergence_b')).pow(2) +
+                    (pl.col('field_potential') - pl.col('field_potential_b')).pow(2)
+                ).sqrt().alias('field_distance'),
+
+                # Divergence distance (difference in source/sink behavior)
+                (pl.col('divergence') - pl.col('divergence_b')).abs().alias('divergence_distance'),
+
+                # Field sign agreement (same role: source/sink)
+                (pl.col('divergence').sign() == pl.col('divergence_b').sign())
+                    .cast(pl.Float64).alias('field_sign_agreement'),
+
+                # Divergence product (both sources = +, both sinks = +, mixed = -)
+                (pl.col('divergence') * pl.col('divergence_b')).alias('divergence_product'),
+
+                # Potential difference
+                (pl.col('field_potential') - pl.col('field_potential_b')).abs().alias('potential_diff'),
+
+                # Field magnitude coupling (captures anti-phase coupling)
+                # Product of absolute values: high when both are active regardless of sign
+                (pl.col('laplacian').abs() * pl.col('laplacian_b').abs()).alias('laplacian_magnitude_product'),
+                (pl.col('divergence').abs() * pl.col('divergence_b').abs()).alias('divergence_magnitude_product'),
+
+                # Magnitude similarity: 1 - normalized difference (1 = same magnitude, 0 = very different)
+                (1.0 - (pl.col('laplacian').abs() - pl.col('laplacian_b').abs()).abs() /
+                    (pl.col('laplacian').abs() + pl.col('laplacian_b').abs() + 1e-10)
+                ).alias('laplacian_magnitude_similarity'),
+            ])
+            .select([
+                'indicator_id',
+                pl.col('indicator_id_b').alias('indicator_b'),
+                'cohort',
+                'field_distance',
+                'divergence_distance',
+                'field_sign_agreement',
+                'divergence_product',
+                'potential_diff',
+                'laplacian_magnitude_product',
+                'divergence_magnitude_product',
+                'laplacian_magnitude_similarity',
+                pl.col('divergence').alias('divergence_a'),
+                pl.col('divergence_b'),
+            ])
+        )
+
+        elapsed = (datetime.now() - t0).total_seconds()
+        logger.info(f"[{cohort}] {len(pairwise):,} pairs in {elapsed:.1f}s")
+
+        all_results.append(pairwise)
+
+    # Combine all cohorts
+    if all_results:
+        result = pl.concat(all_results)
+
+        output_path = get_parquet_path('geometry', 'laplace_pair')
+        write_parquet_atomic(result, output_path)
+        logger.info(f"Wrote {len(result):,} rows to {output_path}")
+
+        return {
+            'cohorts': len(cohorts),
+            'pairs': len(result),
+        }
+
+    return {'cohorts': 0, 'pairs': 0}
+
+
+def run_laplace_pairwise_windowed(
+    cohort_filter: str = None,
+) -> dict:
+    """
+    Windowed pairwise - fully vectorized, no Python loops.
+
+    Single Polars pipeline: aggregate → self-join → filter → compute.
+    """
+
+    ensure_directories()
+
+    path = get_parquet_path('vector', 'indicator_field')
+
+    # Use lazy scan for large files (> 500 MB)
+    file_size_mb = get_file_size_mb(path)
+    logger.info(f"Loading {path} ({file_size_mb:.0f} MB)")
+
+    if file_size_mb > 500:
+        logger.info("  Using lazy scan (large file)")
+        laplace = pl.scan_parquet(path).collect()
+    else:
+        laplace = pl.read_parquet(path)
+    logger.info(f"Loaded {len(laplace):,} rows")
+
+    # Add cohort column derived from indicator_id
+    laplace = laplace.with_columns(
+        pl.col('indicator_id').map_elements(extract_cohort_from_indicator, return_dtype=pl.Utf8).alias('cohort')
+    )
+
+    if cohort_filter:
+        laplace = laplace.filter(pl.col('cohort') == cohort_filter)
+        logger.info(f"Filtered to {cohort_filter}: {len(laplace):,} rows")
+
+    # Step 1: Aggregate to (cohort, window_end, indicator_id) level
+    logger.info("Aggregating to indicator-window level...")
+    agg = (
+        laplace
+        .group_by(['cohort', 'window_end', 'indicator_id'])
+        .agg([
+            pl.col('gradient_mean').mean().alias('gradient'),
+            pl.col('laplacian_mean').mean().alias('laplacian'),
+            pl.col('divergence').mean(),
+            pl.col('field_potential').mean(),
+        ])
+    )
+    logger.info(f"Aggregated to {len(agg):,} indicator-windows")
+
+    # Step 2: Self-join on (cohort, window_end) to get all pairs
+    logger.info("Computing pairwise (cross-join)...")
+    pairwise = (
+        agg
+        .join(
+            agg,
+            on=['cohort', 'window_end'],
+            how='inner',
+            suffix='_b'
+        )
+        .filter(pl.col('indicator_id') < pl.col('indicator_id_b'))
+        .with_columns([
+            # Field distance in 4D Laplace space
+            (
+                (pl.col('gradient') - pl.col('gradient_b')).pow(2) +
+                (pl.col('laplacian') - pl.col('laplacian_b')).pow(2) +
+                (pl.col('divergence') - pl.col('divergence_b')).pow(2) +
+                (pl.col('field_potential') - pl.col('field_potential_b')).pow(2)
+            ).sqrt().alias('field_distance'),
+
+            # Divergence distance
+            (pl.col('divergence') - pl.col('divergence_b')).abs().alias('divergence_distance'),
+
+            # Field sign agreement
+            (pl.col('divergence').sign() == pl.col('divergence_b').sign())
+                .cast(pl.Float64).alias('field_sign_agreement'),
+
+            # Divergence product
+            (pl.col('divergence') * pl.col('divergence_b')).alias('divergence_product'),
+
+            # Field magnitude coupling (captures anti-phase coupling)
+            (pl.col('laplacian').abs() * pl.col('laplacian_b').abs()).alias('laplacian_magnitude_product'),
+            (pl.col('divergence').abs() * pl.col('divergence_b').abs()).alias('divergence_magnitude_product'),
+
+            # Magnitude similarity
+            (1.0 - (pl.col('laplacian').abs() - pl.col('laplacian_b').abs()).abs() /
+                (pl.col('laplacian').abs() + pl.col('laplacian_b').abs() + 1e-10)
+            ).alias('laplacian_magnitude_similarity'),
+        ])
+        .select([
+            'indicator_id',
+            pl.col('indicator_id_b').alias('indicator_b'),
+            'cohort',
+            'window_end',
+            'field_distance',
+            'divergence_distance',
+            'field_sign_agreement',
+            'divergence_product',
+            'laplacian_magnitude_product',
+            'divergence_magnitude_product',
+            'laplacian_magnitude_similarity',
+            pl.col('divergence').alias('div_a'),
+            pl.col('divergence_b').alias('div_b'),
+        ])
+    )
+
+    logger.info(f"Computed {len(pairwise):,} pair-windows")
+
+    # Write output
+    output_path = get_parquet_path('geometry', 'laplace_pair_windowed')
+    write_parquet_atomic(pairwise, output_path)
+    logger.info(f"Wrote {len(pairwise):,} rows to {output_path}")
+
+    return {'pairs': len(pairwise)}
+
+
+if __name__ == '__main__':
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--cohort', type=str, help='Filter to cohort')
+    parser.add_argument('--windowed', action='store_true', help='Keep time dimension')
+    args = parser.parse_args()
+
+    logger.info("=" * 70)
+    logger.info("PRISM LAPLACE PAIRWISE (VECTORIZED)")
+    logger.info("=" * 70)
+
+    if args.windowed:
+        stats = run_laplace_pairwise_windowed(args.cohort)
+    else:
+        stats = run_laplace_pairwise_vectorized(args.cohort)
+
+    logger.info("=" * 70)
+    logger.info(f"COMPLETE: {stats}")
+    logger.info("=" * 70)

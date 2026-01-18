@@ -1,0 +1,31 @@
+# prism/domains/climate.yaml
+# Domain configuration for climate and environmental time series
+
+domain: climate
+description: Climate and environmental time series
+
+temporal:
+  min_resolution: 1d          # Daily measurements
+  max_resolution: 100y        # Century-scale patterns
+  business_calendar: null     # No business days
+  week_end: sunday            # Standard week
+
+  frequencies:
+    hourly:    { resolution: 1h,   rare: true }
+    daily:     { resolution: 1d,   default: true }
+    weekly:    { resolution: 1w,   resample_to: W }
+    monthly:   { resolution: 1mo,  resample_to: MS }
+    seasonal:  { resolution: 3mo,  resample_to: QS }
+    annual:    { resolution: 1y,   resample_to: YS }
+    decadal:   { resolution: 10y,  resample_to: 10YS }
+
+windows:
+  short:   { days: 365,    label: "1 year" }
+  medium:  { days: 1825,   label: "5 years" }
+  default: { days: 3650,   label: "10 years" }
+  long:    { days: 10950,  label: "30 years" }
+
+validation:
+  min_observations_per_window: 30
+  max_gap_days: 90
+  coverage_threshold: 0.70

@@ -1,0 +1,80 @@
+# Python bytecode / caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+.env.*
+.env_guard.sh
+.claude/settings.local.json
+
+# Databases (runtime state)
+*.duckdb
+*.duckdb.wal
+*.db
+*.sqlite
+*.sqlite3
+
+# Archives
+*.zip
+
+# Runtime outputs / experiment artifacts
+# output/ is tracked for sharing via git pull
+runtime/
+results/
+/logs/
+reports/
+!sql/reports/
+!notebooks/logs/
+
+# Temporary / scratch files
+tmp/
+temp/
+.cache/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Secrets / credentials
+*.pem
+*.key
+*.env
+.env.*
+
+# Data directories
+/data/
+prism_data/
+EEG.csv/
+
+# Python packaging
+*.egg-info/
+dist/
+build/
+
+# Compiled extensions
+*.dylib
+*.so
+
+# Generated documentation
+docs/_build/
+docs/*.pdf
+docs/*.html
+docs/*.tmp
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+placeholder/
+one-time.md
+zshrc.md

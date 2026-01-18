@@ -1,0 +1,928 @@
+"""
+PRISM State Runner - Temporal Dynamics from Geometry
+====================================================
+
+Orchestrates temporal state dynamics by analyzing geometry evolution over time.
+
+This runner is a PURE ORCHESTRATOR:
+- Reads from geometry.structure, geometry.displacement, geometry.indicators
+- Computes temporal dynamics (energy, tension, phases)
+- Detects regime shifts and cross-cohort transmission
+- Stores to state.system, state.indicator_dynamics, state.transfers
+
+NO COMPUTATION LOGIC - all delegated to canonical engines.
+
+Pipeline:
+    geometry.* -> state.*
+
+STATE DYNAMICS ENGINES (5):
+    - energy_dynamics:    Energy trends, acceleration, z-scores
+    - tension_dynamics:   Dispersion velocity, alignment evolution
+    - phase_detector:     Regime shifts, phase classification
+    - cohort_aggregator:  Indicator-level to cohort-level metrics
+    - transfer_detector:  Cross-cohort transmission patterns
+
+Output Schema:
+    state.system             - System-level temporal dynamics
+    state.indicator_dynamics - Per-indicator temporal evolution
+    state.transfers          - Cross-cohort transmission
+
+Storage: Parquet files (no database locks)
+
+Usage:
+    # Run on all available geometry data
+    python -m prism.entry_points.state
+
+    # Run on specific date range (requires --testing)
+    python -m prism.entry_points.state --testing --start 2020-01-01 --end 2024-12-31
+
+    # Single snapshot (requires --testing)
+    python -m prism.entry_points.state --testing --snapshot 2024-01-15
+
+    # Parallel execution
+    python -m prism.entry_points.state --workers 4
+"""
+
+import argparse
+import logging
+import numpy as np
+import polars as pl
+from datetime import datetime, date, timedelta
+from pathlib import Path
+from typing import Dict, List, Any, Optional
+import warnings
+
+from prism.db.parquet_store import ensure_directories, get_parquet_path
+from prism.db.polars_io import read_parquet, upsert_parquet
+from prism.db.scratch import TempParquet, merge_to_table
+from prism.engines.utils.parallel import (
+    WorkerAssignment,
+    divide_by_count,
+    generate_temp_path,
+    run_workers,
+)
+
+# Canonical temporal dynamics engines
+from prism.engines.energy_dynamics import EnergyDynamicsEngine
+from prism.engines.tension_dynamics import TensionDynamicsEngine
+from prism.engines.phase_detector import PhaseDetectorEngine
+from prism.engines.cohort_aggregator import CohortAggregatorEngine
+from prism.engines.transfer_detector import TransferDetectorEngine
+
+warnings.filterwarnings('ignore')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+
+DEFAULT_STRIDE = 5  # Days between state computations
+LOOKBACK_WINDOW = 63  # Days of history for dynamics computation
+MIN_HISTORY = 20  # Minimum snapshots needed for dynamics
+
+# Key columns for upsert deduplication
+SYSTEM_KEY_COLS = ['state_time']
+INDICATOR_DYNAMICS_KEY_COLS = ['indicator_id', 'state_time']
+TRANSFERS_KEY_COLS = ['state_time', 'cohort_from', 'cohort_to']
+
+
+# =============================================================================
+# DATA FETCHING
+# =============================================================================
+
+def get_available_dates() -> List[date]:
+    """Get all dates with geometry data from parquet files."""
+    structure_path = get_parquet_path('geometry', 'structure')
+    if not structure_path.exists():
+        return []
+
+    df = pl.read_parquet(structure_path, columns=['window_end'])
+    if len(df) == 0:
+        return []
+
+    # Get unique dates sorted
+    dates = df.select('window_end').unique().sort('window_end')
+    return dates['window_end'].to_list()
+
+
+def get_geometry_history(
+    end_date: date,
+    lookback: int = LOOKBACK_WINDOW
+) -> pl.DataFrame:
+    """
+    Fetch geometry.structure history for dynamics computation.
+
+    Returns DataFrame with columns from geometry.structure.
+    """
+    structure_path = get_parquet_path('geometry', 'structure')
+    if not structure_path.exists():
+        return pl.DataFrame()
+
+    start_date = end_date - timedelta(days=lookback * 2)  # Buffer for sparse data
+
+    df = pl.read_parquet(structure_path)
+    df = df.filter(
+        (pl.col('window_end') >= start_date) &
+        (pl.col('window_end') <= end_date)
+    ).select([
+        'window_end',
+        'n_indicators',
+        'pca_variance_1',
+        'pca_variance_2',
+        'pca_variance_3',
+        'pca_cumulative_3',
+        'n_clusters',
+        'total_dispersion',
+        'mean_alignment',
+        'system_coherence',
+        'system_energy',
+    ]).sort('window_end')
+
+    return df
+
+
+def get_displacement_history(
+    end_date: date,
+    lookback: int = LOOKBACK_WINDOW
+) -> pl.DataFrame:
+    """
+    Fetch geometry.displacement history for dynamics computation.
+    """
+    displacement_path = get_parquet_path('geometry', 'displacement')
+    if not displacement_path.exists():
+        return pl.DataFrame()
+
+    start_date = end_date - timedelta(days=lookback * 2)
+
+    df = pl.read_parquet(displacement_path)
+    df = df.filter(
+        (pl.col('window_end_to') >= start_date) &
+        (pl.col('window_end_to') <= end_date)
+    ).select([
+        pl.col('window_end_to').alias('window_end'),
+        'days_elapsed',
+        'energy_total',
+        'energy_63',
+        'energy_126',
+        'energy_252',
+        'anchor_ratio',
+        'barycenter_shift_mean',
+        'dispersion_delta',
+        'dispersion_velocity',
+        'regime_conviction',
+    ]).sort('window_end')
+
+    return df
+
+
+def get_indicator_geometry(window_end: date) -> pl.DataFrame:
+    """
+    Fetch geometry.indicators for a specific date.
+    """
+    indicators_path = get_parquet_path('geometry', 'indicators')
+    if not indicators_path.exists():
+        return pl.DataFrame()
+
+    df = pl.read_parquet(indicators_path)
+    df = df.filter(pl.col('window_end') == window_end).select([
+        'indicator_id',
+        'barycenter',
+        'timescale_dispersion',
+        'timescale_alignment',
+    ])
+
+    return df
+
+
+def get_cohort_membership() -> Dict[str, List[str]]:
+    """Get cohort membership mapping from parquet."""
+    members_path = get_parquet_path('config', 'cohort_members')
+    if not members_path.exists():
+        return {}
+
+    df = pl.read_parquet(members_path)
+    df = df.filter(pl.col('cohort_id').is_not_null()).sort(['cohort_id', 'indicator_id'])
+
+    membership = {}
+    for row in df.iter_rows(named=True):
+        cohort_id = row['cohort_id']
+        if cohort_id not in membership:
+            membership[cohort_id] = []
+        membership[cohort_id].append(row['indicator_id'])
+
+    return membership
+
+
+# =============================================================================
+# STATE COMPUTATION
+# =============================================================================
+
+def compute_system_state(
+    structure_history: pl.DataFrame,
+    displacement_history: pl.DataFrame,
+    state_date: date
+) -> Dict[str, Any]:
+    """
+    Compute system-level state for a single date.
+
+    Uses energy_dynamics, tension_dynamics, and phase_detector engines.
+    """
+    if len(structure_history) == 0 or len(displacement_history) == 0:
+        return {}
+
+    # Initialize engines
+    energy_engine = EnergyDynamicsEngine()
+    tension_engine = TensionDynamicsEngine()
+    phase_engine = PhaseDetectorEngine()
+
+    # Convert to pandas for engine compatibility (engines expect pandas Series)
+    struct_pd = structure_history.to_pandas().set_index('window_end')
+    disp_pd = displacement_history.to_pandas().set_index('window_end')
+
+    # Prepare series
+    energy_series = disp_pd['energy_total']
+    dispersion_series = struct_pd['total_dispersion']
+    alignment_series = struct_pd['mean_alignment']
+    coherence_series = struct_pd['system_coherence']
+
+    # Get current values
+    current_disp = displacement_history.filter(pl.col('window_end') == state_date)
+    current_struct = structure_history.filter(pl.col('window_end') == state_date)
+
+    if len(current_disp) == 0 and len(current_struct) == 0:
+        return {}
+
+    # Energy dynamics
+    energy_result = energy_engine.run(energy_series)
+
+    # Tension dynamics
+    tension_result = tension_engine.run(
+        dispersion_series,
+        alignment_series,
+        coherence_series
+    )
+
+    # Get anchor_ratio and regime_conviction from current displacement
+    if len(current_disp) > 0:
+        anchor_ratio = current_disp['anchor_ratio'][0]
+        regime_conviction = current_disp['regime_conviction'][0]
+    else:
+        anchor_ratio = 0.0
+        regime_conviction = 0.0
+
+    # Phase detection
+    phase_result = phase_engine.run(
+        energy_total=energy_result.energy_total,
+        energy_zscore=energy_result.energy_zscore or 0.0,
+        energy_trend=energy_result.energy_trend,
+        dispersion_total=tension_result.dispersion_total,
+        tension_state=tension_result.tension_state,
+        alignment=tension_result.alignment_mean,
+        anchor_ratio=anchor_ratio,
+        regime_conviction=regime_conviction
+    )
+
+    # Get PCA concentration
+    if len(current_struct) > 0:
+        pca_concentration = current_struct['pca_cumulative_3'][0]
+    else:
+        pca_concentration = 0.0
+
+    return {
+        'state_time': state_date,
+        'energy_total': energy_result.energy_total,
+        'energy_ma5': energy_result.energy_ma5,
+        'energy_ma20': energy_result.energy_ma20,
+        'energy_acceleration': energy_result.energy_acceleration,
+        'energy_zscore': energy_result.energy_zscore,
+        'dispersion_total': tension_result.dispersion_total,
+        'dispersion_velocity': tension_result.dispersion_velocity,
+        'dispersion_acceleration': tension_result.dispersion_acceleration,
+        'alignment_mean': tension_result.alignment_mean,
+        'coherence': tension_result.coherence,
+        'pca_concentration': pca_concentration,
+        'regime_conviction': regime_conviction,
+        'anchor_ratio': anchor_ratio,
+        'phase_score': phase_result.phase_score,
+        'phase_label': phase_result.phase_label,
+        'is_regime_shift': bool(phase_result.is_regime_shift),
+        'shift_confidence': phase_result.shift_confidence,
+    }
+
+
+def compute_indicator_dynamics(
+    state_date: date,
+    prev_date: Optional[date]
+) -> List[Dict[str, Any]]:
+    """
+    Compute indicator-level dynamics for a single date.
+    """
+    current = get_indicator_geometry(state_date)
+
+    if len(current) == 0:
+        return []
+
+    results = []
+
+    if prev_date:
+        previous = get_indicator_geometry(prev_date)
+        prev_dict = {row['indicator_id']: row for row in previous.iter_rows(named=True)}
+    else:
+        prev_dict = {}
+
+    # Compute system centroid
+    barycenters = []
+    for row in current.iter_rows(named=True):
+        bc = row['barycenter']
+        if bc is not None and len(bc) > 0:
+            barycenters.append(np.array(bc))
+
+    if barycenters:
+        system_centroid = np.mean(barycenters, axis=0)
+    else:
+        system_centroid = None
+
+    for row in current.iter_rows(named=True):
+        ind_id = row['indicator_id']
+        bc = row['barycenter']
+        disp = row['timescale_dispersion']
+        align = row['timescale_alignment']
+
+        result = {
+            'indicator_id': ind_id,
+            'state_time': state_date,
+            'dispersion': disp,
+            'alignment': align,
+            'barycenter_shift': 0.0,
+            'barycenter_velocity': 0.0,
+            'barycenter_acceleration': 0.0,
+            'dispersion_delta': 0.0,
+            'distance_to_centroid': 0.0,
+            'cluster_id': 0,
+            'cluster_changed': False,
+            'leads_system': False,
+            'lags_system': False,
+            'lead_lag_days': 0,
+        }
+
+        # Compute shift from previous
+        if ind_id in prev_dict:
+            prev_row = prev_dict[ind_id]
+            prev_bc = prev_row['barycenter']
+
+            if bc is not None and prev_bc is not None and len(bc) > 0 and len(prev_bc) > 0:
+                from scipy.spatial.distance import euclidean
+                result['barycenter_shift'] = euclidean(np.array(bc), np.array(prev_bc))
+
+            if prev_row['timescale_dispersion'] is not None:
+                result['dispersion_delta'] = disp - prev_row['timescale_dispersion']
+
+        # Distance to system centroid
+        if system_centroid is not None and bc is not None and len(bc) > 0:
+            from scipy.spatial.distance import euclidean
+            result['distance_to_centroid'] = euclidean(np.array(bc), system_centroid)
+
+        results.append(result)
+
+    return results
+
+
+def compute_cross_cohort_transfers(
+    state_date: date,
+    lookback: int = 30
+) -> List[Dict[str, Any]]:
+    """
+    Compute cross-cohort transfer metrics.
+    """
+    # Get cohort membership
+    membership = get_cohort_membership()
+
+    if len(membership) < 2:
+        return []
+
+    # Get energy history by cohort
+    start_date = state_date - timedelta(days=lookback * 2)
+
+    # Get displacement data
+    displacement_path = get_parquet_path('geometry', 'displacement')
+    if not displacement_path.exists():
+        return []
+
+    disp_df = pl.read_parquet(displacement_path)
+    disp_df = disp_df.filter(
+        (pl.col('window_end_to') >= start_date) &
+        (pl.col('window_end_to') <= state_date)
+    ).select([
+        pl.col('window_end_to').alias('window_end'),
+        'energy_total',
+    ]).sort('window_end')
+
+    if len(disp_df) == 0 or len(disp_df) < 10:
+        return []
+
+    # For simplified version, detect transfers between cohorts
+    # using system-level metrics as proxy
+    # Full implementation would use cohort-specific aggregates
+
+    results = []
+    cohorts = list(membership.keys())
+    transfer_engine = TransferDetectorEngine()
+
+    # Convert to pandas for engine compatibility
+    disp_pd = disp_df.to_pandas().set_index('window_end')
+    energy_series = disp_pd['energy_total']
+
+    for i, cohort_a in enumerate(cohorts):
+        for cohort_b in cohorts[i+1:]:
+            # Simplified: use same series for demo
+            # Real implementation: aggregate indicator-level metrics per cohort
+            result = transfer_engine.run(
+                energy_series,
+                energy_series,  # Would be cohort_b's series
+                cohort_a,
+                cohort_b
+            )
+
+            results.append({
+                'state_time': state_date,
+                'cohort_from': result.cohort_from,
+                'cohort_to': result.cohort_to,
+                'transfer_strength': result.transfer_strength,
+                'transfer_lag': result.transfer_lag,
+                'transfer_direction': result.transfer_direction,
+                'granger_fstat': result.granger_fstat,
+                'granger_pvalue': result.granger_pvalue,
+                'te_net': None,  # Would come from TransferEntropyEngine
+                'correlation': result.correlation,
+                'correlation_lag': result.correlation_lag,
+                'is_significant': result.is_significant,
+                'transfer_type': result.transfer_type,
+            })
+
+    return results
+
+
+# =============================================================================
+# MAIN RUNNER
+# =============================================================================
+
+def run_state_snapshot(
+    state_date: date,
+    prev_date: Optional[date] = None,
+    verbose: bool = True
+) -> Dict[str, Any]:
+    """
+    Compute state for a single snapshot date.
+
+    Returns dict with results to store.
+    """
+    results = {'system': None, 'indicators': [], 'transfers': []}
+
+    # Get history
+    structure_history = get_geometry_history(state_date)
+    displacement_history = get_displacement_history(state_date)
+
+    if len(structure_history) == 0 or len(displacement_history) == 0:
+        if verbose:
+            logger.warning(f"  {state_date}: No geometry data")
+        return results
+
+    # 1. System state
+    system_state = compute_system_state(structure_history, displacement_history, state_date)
+    if system_state:
+        results['system'] = system_state
+
+    # 2. Indicator dynamics
+    indicator_dynamics = compute_indicator_dynamics(state_date, prev_date)
+    if indicator_dynamics:
+        results['indicators'] = indicator_dynamics
+
+    # 3. Cross-cohort transfers
+    transfers = compute_cross_cohort_transfers(state_date)
+    if transfers:
+        results['transfers'] = transfers
+
+    if verbose and system_state:
+        phase = system_state.get('phase_label', 'unknown')
+        shift = system_state.get('is_regime_shift', False)
+        logger.info(f"  {state_date}: phase={phase}, shift={shift}, indicators={len(indicator_dynamics)}")
+
+    return results
+
+
+def run_state_range(
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    stride: int = DEFAULT_STRIDE,
+    verbose: bool = True
+) -> Dict[str, int]:
+    """
+    Run state computation for a date range.
+    """
+    ensure_directories()
+
+    # Get available dates
+    available_dates = get_available_dates()
+
+    if not available_dates:
+        logger.error("No geometry data found. Run geometry runner first.")
+        return {'system': 0, 'indicators': 0, 'transfers': 0}
+
+    # Filter to range
+    if start_date:
+        available_dates = [d for d in available_dates if d >= start_date]
+    if end_date:
+        available_dates = [d for d in available_dates if d <= end_date]
+
+    if not available_dates:
+        logger.error(f"No data in range {start_date} to {end_date}")
+        return {'system': 0, 'indicators': 0, 'transfers': 0}
+
+    # Apply stride
+    if stride > 1:
+        strided_dates = available_dates[::stride]
+    else:
+        strided_dates = available_dates
+
+    if verbose:
+        logger.info("=" * 80)
+        logger.info("PRISM STATE RUNNER - TEMPORAL DYNAMICS")
+        logger.info("=" * 80)
+        logger.info(f"Storage: Parquet files")
+        logger.info(f"Date range: {strided_dates[0]} to {strided_dates[-1]}")
+        logger.info(f"Snapshots: {len(strided_dates)} (stride={stride})")
+        logger.info("")
+
+    totals = {'system': 0, 'indicators': 0, 'transfers': 0}
+    prev_date = None
+    computed_at = datetime.now()
+
+    # Collect all results
+    system_rows = []
+    indicator_rows = []
+    transfer_rows = []
+
+    for i, state_date in enumerate(strided_dates):
+        results = run_state_snapshot(state_date, prev_date, verbose)
+
+        if results['system']:
+            results['system']['computed_at'] = computed_at
+            system_rows.append(results['system'])
+            totals['system'] += 1
+
+        for ind in results['indicators']:
+            ind['computed_at'] = computed_at
+            indicator_rows.append(ind)
+        totals['indicators'] += len(results['indicators'])
+
+        for tr in results['transfers']:
+            tr['computed_at'] = computed_at
+            transfer_rows.append(tr)
+        totals['transfers'] += len(results['transfers'])
+
+        prev_date = state_date
+
+        # Periodic write (every 50 dates)
+        if (i + 1) % 50 == 0:
+            if system_rows:
+                df = pl.DataFrame(system_rows)
+                upsert_parquet(df, get_parquet_path('state', 'system'), SYSTEM_KEY_COLS)
+                system_rows = []
+            if indicator_rows:
+                df = pl.DataFrame(indicator_rows)
+                upsert_parquet(df, get_parquet_path('state', 'indicator_dynamics'), INDICATOR_DYNAMICS_KEY_COLS)
+                indicator_rows = []
+            if transfer_rows:
+                df = pl.DataFrame(transfer_rows)
+                upsert_parquet(df, get_parquet_path('state', 'transfers'), TRANSFERS_KEY_COLS)
+                transfer_rows = []
+
+    # Final write
+    if system_rows:
+        df = pl.DataFrame(system_rows)
+        upsert_parquet(df, get_parquet_path('state', 'system'), SYSTEM_KEY_COLS)
+    if indicator_rows:
+        df = pl.DataFrame(indicator_rows)
+        upsert_parquet(df, get_parquet_path('state', 'indicator_dynamics'), INDICATOR_DYNAMICS_KEY_COLS)
+    if transfer_rows:
+        df = pl.DataFrame(transfer_rows)
+        upsert_parquet(df, get_parquet_path('state', 'transfers'), TRANSFERS_KEY_COLS)
+
+    if verbose:
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info(f"COMPLETE: {totals['system']} system states, "
+                    f"{totals['indicators']} indicator dynamics, "
+                    f"{totals['transfers']} transfers")
+        logger.info("=" * 80)
+
+    return totals
+
+
+# =============================================================================
+# PARALLEL WORKER
+# =============================================================================
+
+def process_state_parallel(assignment: WorkerAssignment) -> Dict[str, Any]:
+    """Worker function for parallel state computation."""
+    dates = assignment.items
+    temp_path = assignment.temp_path
+    config = assignment.config
+
+    totals = {'system': 0, 'indicators': 0, 'transfers': 0}
+    prev_date = None
+    computed_at = datetime.now()
+
+    # Collect all results
+    system_rows = []
+    indicator_rows = []
+    transfer_rows = []
+
+    try:
+        for state_date in dates:
+            # Get history
+            structure_history = get_geometry_history(state_date)
+            displacement_history = get_displacement_history(state_date)
+
+            if len(structure_history) == 0 or len(displacement_history) == 0:
+                continue
+
+            # Compute system state
+            system_state = compute_system_state(structure_history, displacement_history, state_date)
+            if system_state:
+                system_state['computed_at'] = computed_at
+                system_rows.append(system_state)
+                totals['system'] += 1
+
+            # Compute indicator dynamics
+            indicator_dynamics = compute_indicator_dynamics(state_date, prev_date)
+            for ind in indicator_dynamics:
+                ind['computed_at'] = computed_at
+                indicator_rows.append(ind)
+            totals['indicators'] += len(indicator_dynamics)
+
+            # Cross-cohort transfers (less frequently)
+            if totals['system'] % 5 == 0:
+                transfers = compute_cross_cohort_transfers(state_date)
+                for tr in transfers:
+                    tr['computed_at'] = computed_at
+                    transfer_rows.append(tr)
+                totals['transfers'] += len(transfers)
+
+            prev_date = state_date
+
+        # Write all results to temp parquet
+        # We write a combined dataframe with a 'table_type' column to distinguish
+        all_rows = []
+
+        for row in system_rows:
+            row['_table'] = 'system'
+            all_rows.append(row)
+
+        for row in indicator_rows:
+            row['_table'] = 'indicator_dynamics'
+            all_rows.append(row)
+
+        for row in transfer_rows:
+            row['_table'] = 'transfers'
+            all_rows.append(row)
+
+        if all_rows:
+            # Write combined data to temp path
+            df = pl.DataFrame(all_rows, infer_schema_length=None)
+            df.write_parquet(temp_path)
+
+    except Exception as e:
+        logger.error(f"Worker error: {e}")
+        raise
+
+    return totals
+
+
+def merge_state_results(temp_paths: List[Path], verbose: bool = True) -> Dict[str, int]:
+    """
+    Merge worker temp files into main state parquet files.
+    """
+    totals = {'system': 0, 'indicator_dynamics': 0, 'transfers': 0}
+
+    # Read all temp files
+    all_dfs = []
+    for path in temp_paths:
+        if path.exists():
+            try:
+                df = pl.read_parquet(path)
+                if len(df) > 0:
+                    all_dfs.append(df)
+            except Exception as e:
+                logger.warning(f"Failed to read temp file {path}: {e}")
+
+    if not all_dfs:
+        return totals
+
+    combined = pl.concat(all_dfs, how='diagonal_relaxed')
+
+    # Split by table type and write to respective parquet files
+    for table_name, key_cols in [
+        ('system', SYSTEM_KEY_COLS),
+        ('indicator_dynamics', INDICATOR_DYNAMICS_KEY_COLS),
+        ('transfers', TRANSFERS_KEY_COLS),
+    ]:
+        table_df = combined.filter(pl.col('_table') == table_name).drop('_table')
+
+        if len(table_df) > 0:
+            target_path = get_parquet_path('state', table_name)
+            upsert_parquet(table_df, target_path, key_cols)
+            totals[table_name] = len(table_df)
+
+            if verbose:
+                logger.info(f"  Merged {len(table_df):,} rows to state.{table_name}")
+
+    # Cleanup temp files
+    for path in temp_paths:
+        if path.exists():
+            try:
+                path.unlink()
+            except Exception:
+                pass
+
+    return totals
+
+
+# =============================================================================
+# CLI
+# =============================================================================
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='PRISM State Runner - Temporal Dynamics from Geometry',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Run on all geometry data
+  python -m prism.entry_points.state
+
+  # Run on specific date range (requires --testing)
+  python -m prism.entry_points.state --testing --start 2020-01-01 --end 2024-12-31
+
+  # Single snapshot (requires --testing)
+  python -m prism.entry_points.state --testing --snapshot 2024-01-15
+
+  # Parallel execution
+  python -m prism.entry_points.state --workers 4
+
+Storage: Parquet files (no database locks)
+  data/state/system.parquet             - System-level temporal dynamics
+  data/state/indicator_dynamics.parquet - Per-indicator temporal evolution
+  data/state/transfers.parquet          - Cross-cohort transmission patterns
+"""
+    )
+
+    parser.add_argument('--start', type=str, help='Start date (YYYY-MM-DD)')
+    parser.add_argument('--end', type=str, help='End date (YYYY-MM-DD)')
+    parser.add_argument('--snapshot', type=str, help='Single snapshot date')
+    parser.add_argument('--stride', type=int, default=DEFAULT_STRIDE,
+                        help=f'Days between state computations (default: {DEFAULT_STRIDE})')
+    parser.add_argument('--workers', type=int, default=1,
+                        help='Number of parallel workers')
+    parser.add_argument('--quiet', action='store_true', help='Suppress progress output')
+
+    # Testing mode - REQUIRED to use any limiting flags
+    parser.add_argument('--testing', action='store_true',
+                        help='Enable testing mode. REQUIRED to use limiting flags (--start, --end, --snapshot). Without --testing, all limiting flags are ignored and full run executes.')
+
+    args = parser.parse_args()
+
+    # ==========================================================================
+    # CRITICAL: --testing guard
+    # Without --testing, ALL limiting flags are ignored and full run executes.
+    # ==========================================================================
+    if not args.testing:
+        limiting_flags_used = []
+        if args.start:
+            limiting_flags_used.append('--start')
+        if args.end:
+            limiting_flags_used.append('--end')
+        if args.snapshot:
+            limiting_flags_used.append('--snapshot')
+
+        if limiting_flags_used:
+            logger.warning("=" * 80)
+            logger.warning("LIMITING FLAGS IGNORED - --testing not specified")
+            logger.warning(f"Ignored flags: {', '.join(limiting_flags_used)}")
+            logger.warning("Running FULL computation instead. Use --testing to enable limiting flags.")
+            logger.warning("=" * 80)
+
+        # Override to full defaults
+        args.start = None
+        args.end = None
+        args.snapshot = None
+
+    # Parse dates
+    start_date = None
+    end_date = None
+
+    if args.snapshot:
+        from datetime import datetime as dt
+        snapshot_date = dt.strptime(args.snapshot, '%Y-%m-%d').date()
+
+        ensure_directories()
+        results = run_state_snapshot(snapshot_date, verbose=not args.quiet)
+
+        # Write single snapshot results
+        computed_at = datetime.now()
+        if results['system']:
+            results['system']['computed_at'] = computed_at
+            df = pl.DataFrame([results['system']])
+            upsert_parquet(df, get_parquet_path('state', 'system'), SYSTEM_KEY_COLS)
+
+        if results['indicators']:
+            for ind in results['indicators']:
+                ind['computed_at'] = computed_at
+            df = pl.DataFrame(results['indicators'])
+            upsert_parquet(df, get_parquet_path('state', 'indicator_dynamics'), INDICATOR_DYNAMICS_KEY_COLS)
+
+        if results['transfers']:
+            for tr in results['transfers']:
+                tr['computed_at'] = computed_at
+            df = pl.DataFrame(results['transfers'])
+            upsert_parquet(df, get_parquet_path('state', 'transfers'), TRANSFERS_KEY_COLS)
+
+        return 0
+
+    if args.start:
+        from datetime import datetime as dt
+        start_date = dt.strptime(args.start, '%Y-%m-%d').date()
+
+    if args.end:
+        from datetime import datetime as dt
+        end_date = dt.strptime(args.end, '%Y-%m-%d').date()
+
+    # Run with or without parallelization
+    if args.workers > 1:
+        ensure_directories()
+        logger.info(f"Parallel mode: {args.workers} workers")
+
+        available_dates = get_available_dates()
+
+        if start_date:
+            available_dates = [d for d in available_dates if d >= start_date]
+        if end_date:
+            available_dates = [d for d in available_dates if d <= end_date]
+
+        if args.stride > 1:
+            available_dates = available_dates[::args.stride]
+
+        if not available_dates:
+            logger.error("No dates to process")
+            return 1
+
+        logger.info(f"Processing {len(available_dates)} dates with {args.workers} workers")
+
+        chunks = divide_by_count(available_dates, args.workers)
+        temp_paths = []
+        assignments = []
+
+        for i, chunk in enumerate(chunks):
+            temp_path = generate_temp_path(i, prefix='state')
+            temp_paths.append(temp_path)
+            assignments.append(WorkerAssignment(
+                worker_id=i,
+                temp_path=temp_path,
+                items=chunk,
+                config={},
+            ))
+
+        results = run_workers(process_state_parallel, assignments, args.workers)
+
+        # Report worker results
+        successful = sum(1 for r in results if r.status == 'success')
+        failed = sum(1 for r in results if r.status == 'error')
+        logger.info(f"Workers complete: {successful} success, {failed} failed")
+
+        # Merge results
+        logger.info("Merging results...")
+        successful_paths = [r.temp_path for r in results if r.status == 'success' and r.temp_path.exists()]
+        totals = merge_state_results(successful_paths, verbose=not args.quiet)
+
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info(f"COMPLETE: {totals.get('system', 0)} system states, "
+                    f"{totals.get('indicator_dynamics', 0)} indicator dynamics, "
+                    f"{totals.get('transfers', 0)} transfers")
+        logger.info("=" * 80)
+
+    else:
+        run_state_range(
+            start_date,
+            end_date,
+            args.stride,
+            verbose=not args.quiet
+        )
+
+    return 0
+
+
+if __name__ == '__main__':
+    exit(main())

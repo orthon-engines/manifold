@@ -1,0 +1,33 @@
+# prism/domains/particle_physics.yaml
+# Domain configuration for particle collision and decay measurements
+
+domain: particle_physics
+description: Particle collision and decay measurements
+
+temporal:
+  min_resolution: 1ps         # Picosecond
+  max_resolution: 1s          # Second is eternity here
+  business_calendar: null
+
+  units:
+    picosecond:  { seconds: 1e-12 }
+    nanosecond:  { seconds: 1e-9 }
+    microsecond: { seconds: 1e-6 }
+    millisecond: { seconds: 1e-3 }
+
+  frequencies:
+    pico:  { resolution: 1ps,  default: true }
+    nano:  { resolution: 1ns }
+    micro: { resolution: 1us }
+    milli: { resolution: 1ms }
+
+windows:
+  short:   { nanoseconds: 100,  label: "100ns" }
+  medium:  { microseconds: 10,  label: "10us" }
+  default: { microseconds: 100, label: "100us" }
+  long:    { milliseconds: 1,   label: "1ms" }
+
+validation:
+  min_observations_per_window: 1000
+  max_gap_nanoseconds: 100
+  coverage_threshold: 0.95    # Dense data expected

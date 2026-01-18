@@ -1,0 +1,34 @@
+# prism/domains/chemistry.yaml
+# Domain configuration for chemical reaction kinetics and spectroscopy
+
+domain: chemistry
+description: Chemical reaction kinetics and spectroscopy
+
+temporal:
+  min_resolution: 1ms         # Millisecond reactions
+  max_resolution: 1h          # Hour-scale processes
+  business_calendar: null
+
+  units:
+    millisecond: { seconds: 1e-3 }
+    second:      { seconds: 1 }
+    minute:      { seconds: 60 }
+    hour:        { seconds: 3600 }
+
+  frequencies:
+    millisecond: { resolution: 1ms,  default: true }
+    centisecond: { resolution: 10ms }
+    decisecond:  { resolution: 100ms }
+    second:      { resolution: 1s }
+    minute:      { resolution: 1m }
+
+windows:
+  short:   { milliseconds: 100,   label: "100ms" }
+  medium:  { milliseconds: 1000,  label: "1 second" }
+  default: { milliseconds: 5000,  label: "5 seconds" }
+  long:    { milliseconds: 60000, label: "1 minute" }
+
+validation:
+  min_observations_per_window: 50
+  max_gap_milliseconds: 10
+  coverage_threshold: 0.90

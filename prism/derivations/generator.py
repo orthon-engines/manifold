@@ -1,0 +1,231 @@
+"""
+PRISM Derivation Generator
+==========================
+
+CLI tool to generate mathematical derivation documents with actual data values.
+
+Usage:
+    python -m prism.derivations.generator --engine hurst --indicator lorenz_x --window 47
+    python -m prism.derivations.generator --all-engines --indicator lorenz_x --window 47
+"""
+
+import argparse
+import os
+import sys
+from pathlib import Path
+from datetime import datetime
+
+import numpy as np
+import polars as pl
+
+from prism.db.parquet_store import get_parquet_path
+
+
+# Registry of engines that support derivation
+DERIVABLE_ENGINES = {
+    'hurst': 'prism.engines.hurst',
+    'lyapunov': 'prism.engines.lyapunov',
+    'sample_entropy': 'prism.engines.entropy',
+    'permutation_entropy': 'prism.engines.entropy',
+    'dfa': 'prism.engines.characterize',
+    'spectral_entropy': 'prism.engines.spectral',
+    'garch': 'prism.engines.garch',
+}
+
+
+def get_indicator_data(indicator_id: str, window_idx: int = None) -> tuple:
+    """
+    Load indicator data from observations parquet.
+
+    Returns:
+        tuple: (values array, window_start, window_end, window_id)
+    """
+    obs_path = get_parquet_path('raw', 'observations')
+
+    if not os.path.exists(obs_path):
+        raise FileNotFoundError(f"Observations not found: {obs_path}")
+
+    obs = pl.read_parquet(obs_path)
+
+    # Filter to indicator
+    ind_obs = obs.filter(pl.col('indicator_id') == indicator_id).sort('obs_date')
+
+    if ind_obs.height == 0:
+        raise ValueError(f"No observations found for indicator: {indicator_id}")
+
+    values = ind_obs['value'].to_numpy()
+    dates = ind_obs['obs_date'].to_list()
+
+    # If window_idx specified, use windowed data
+    if window_idx is not None:
+        # Default window size of 252 (like anchor tier)
+        window_size = 252
+        if window_idx * 21 + window_size > len(values):
+            raise ValueError(f"Window {window_idx} exceeds data range")
+
+        start_idx = window_idx * 21  # 21-day stride
+        end_idx = start_idx + window_size
+
+        values = values[start_idx:end_idx]
+        window_start = str(dates[start_idx])
+        window_end = str(dates[min(end_idx - 1, len(dates) - 1)])
+        window_id = str(window_idx)
+    else:
+        window_start = str(dates[0])
+        window_end = str(dates[-1])
+        window_id = "full"
+
+    return values, window_start, window_end, window_id
+
+
+def generate_derivation(engine_name: str, indicator_id: str,
+                        window_idx: int = None, output_dir: str = None) -> str:
+    """
+    Generate a derivation document for the specified engine and data.
+
+    Returns:
+        str: Path to generated markdown file
+    """
+    # Load data
+    values, window_start, window_end, window_id = get_indicator_data(
+        indicator_id, window_idx
+    )
+
+    print(f"Loaded {len(values)} observations for {indicator_id}")
+    print(f"Window: {window_start} to {window_end}")
+
+    # Get the derivation function
+    if engine_name == 'hurst':
+        from prism.engines.hurst import compute_hurst_with_derivation
+        result, derivation = compute_hurst_with_derivation(
+            values,
+            indicator_id=indicator_id,
+            window_id=window_id,
+            window_start=window_start,
+            window_end=window_end,
+        )
+    elif engine_name == 'lyapunov':
+        from prism.engines.lyapunov import compute_lyapunov_with_derivation
+        result, derivation = compute_lyapunov_with_derivation(
+            values,
+            indicator_id=indicator_id,
+            window_id=window_id,
+            window_start=window_start,
+            window_end=window_end,
+        )
+    elif engine_name == 'sample_entropy':
+        from prism.engines.entropy import compute_sample_entropy_with_derivation
+        result, derivation = compute_sample_entropy_with_derivation(
+            values,
+            indicator_id=indicator_id,
+            window_id=window_id,
+            window_start=window_start,
+            window_end=window_end,
+        )
+    elif engine_name == 'permutation_entropy':
+        from prism.engines.entropy import compute_permutation_entropy_with_derivation
+        result, derivation = compute_permutation_entropy_with_derivation(
+            values,
+            indicator_id=indicator_id,
+            window_id=window_id,
+            window_start=window_start,
+            window_end=window_end,
+        )
+    elif engine_name == 'dfa':
+        from prism.engines.characterize import compute_dfa_with_derivation
+        result, derivation = compute_dfa_with_derivation(
+            values,
+            indicator_id=indicator_id,
+            window_id=window_id,
+            window_start=window_start,
+            window_end=window_end,
+        )
+    elif engine_name == 'spectral_entropy':
+        from prism.engines.spectral import compute_spectral_entropy_with_derivation
+        result, derivation = compute_spectral_entropy_with_derivation(
+            values,
+            indicator_id=indicator_id,
+            window_id=window_id,
+            window_start=window_start,
+            window_end=window_end,
+        )
+    elif engine_name == 'garch':
+        from prism.engines.garch import compute_garch_with_derivation
+        result, derivation = compute_garch_with_derivation(
+            values,
+            indicator_id=indicator_id,
+            window_id=window_id,
+            window_start=window_start,
+            window_end=window_end,
+        )
+    else:
+        raise NotImplementedError(f"Derivation not implemented for engine: {engine_name}")
+
+    # Set data path for reproducibility
+    derivation.data_path = get_parquet_path('raw', 'observations')
+
+    # Generate markdown
+    markdown = derivation.to_markdown()
+
+    # Determine output path
+    if output_dir is None:
+        output_dir = Path(__file__).parent.parent.parent / 'docs' / 'derivations'
+    else:
+        output_dir = Path(output_dir)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    filename = f"{engine_name}_{indicator_id}_w{window_id}.md"
+    output_path = output_dir / filename
+
+    with open(output_path, 'w') as f:
+        f.write(markdown)
+
+    print(f"Generated: {output_path}")
+
+    return str(output_path)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Generate mathematical derivation documents',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+    # Generate Hurst derivation for lorenz_x, window 47
+    python -m prism.derivations.generator --engine hurst --indicator lorenz_x --window 47
+
+    # Generate derivation using full data series
+    python -m prism.derivations.generator --engine hurst --indicator lorenz_x
+
+    # Specify output directory
+    python -m prism.derivations.generator --engine hurst --indicator lorenz_x --output docs/derivations/
+"""
+    )
+
+    parser.add_argument('--engine', type=str, required=True,
+                        choices=list(DERIVABLE_ENGINES.keys()),
+                        help='Engine to generate derivation for')
+    parser.add_argument('--indicator', type=str, required=True,
+                        help='Indicator ID to use for derivation')
+    parser.add_argument('--window', type=int, default=None,
+                        help='Window index (0-based, uses 252d window with 21d stride)')
+    parser.add_argument('--output', type=str, default=None,
+                        help='Output directory for generated markdown')
+    parser.add_argument('--all-engines', action='store_true',
+                        help='Generate derivations for all available engines')
+
+    args = parser.parse_args()
+
+    if args.all_engines:
+        for engine in DERIVABLE_ENGINES.keys():
+            try:
+                generate_derivation(engine, args.indicator, args.window, args.output)
+            except NotImplementedError as e:
+                print(f"Skipping {engine}: {e}")
+    else:
+        generate_derivation(args.engine, args.indicator, args.window, args.output)
+
+
+if __name__ == '__main__':
+    main()
