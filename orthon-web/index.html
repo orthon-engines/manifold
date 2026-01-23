@@ -332,7 +332,7 @@
                 <div class="tab disabled" data-tab="geometry">Geometry</div>
                 <div class="tab disabled" data-tab="state">State</div>
                 <div class="tab disabled" data-tab="cohort">Cohort</div>
-                <div class="tab disabled" data-tab="sql">SQL</div>
+                <div class="tab disabled" data-tab="derivatives">Derivatives</div>
             </div>
             
             <!-- Welcome -->
@@ -445,21 +445,40 @@
                 </div>
             </div>
             
-            <!-- Tab: SQL -->
-            <div class="tab-content" id="tab-sql">
-                <h2>SQL Console</h2>
-                <p class="description">Query loaded tables directly</p>
+            <!-- Tab: Derivatives -->
+            <div class="tab-content" id="tab-derivatives">
+                <h2>Derivatives Layer</h2>
+                <p class="description">Velocity, acceleration, jerk — rate of change features</p>
                 <div class="card">
-                    <h3>Available Tables</h3>
-                    <p id="availableTables" style="font-family: monospace; font-size: 0.85rem; color: var(--text-light);"></p>
+                    <div class="controls">
+                        <div class="filter-group">
+                            <label>Entity</label>
+                            <select id="derivativesEntity"></select>
+                        </div>
+                        <div class="filter-group">
+                            <label>Metric</label>
+                            <select id="derivativesMetric">
+                                <option value="velocity">Velocity (1st derivative)</option>
+                                <option value="acceleration">Acceleration (2nd derivative)</option>
+                                <option value="jerk">Jerk (3rd derivative)</option>
+                                <option value="curvature">Curvature</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="chart-container" id="derivativesChart"></div>
                 </div>
                 <div class="card">
-                    <h3>Query</h3>
+                    <h3>Data</h3>
+                    <div class="data-table" id="derivativesTable"></div>
+                </div>
+                <div class="card" id="sqlCard">
+                    <h3>SQL Console</h3>
+                    <p id="availableTables" style="font-family: monospace; font-size: 0.85rem; color: var(--text-light); margin-bottom: 0.75rem;"></p>
                     <textarea class="sql-input" id="sqlInput" placeholder="SELECT * FROM vector LIMIT 100"></textarea>
                     <button class="btn" id="runSql">Run Query</button>
                 </div>
                 <div class="card" id="sqlResultCard" style="display: none;">
-                    <h3>Results</h3>
+                    <h3>SQL Results</h3>
                     <div class="data-table" id="sqlResult"></div>
                 </div>
             </div>
@@ -591,7 +610,7 @@
         const conn = await state.db.connect();
         
         // Load each parquet file
-        const files = ['vector', 'geometry', 'state', 'cohort'];
+        const files = ['vector', 'geometry', 'state', 'cohort', 'derivatives'];
         
         for (const name of files) {
             if (state.expectedFiles[`${name}.parquet`]) {
@@ -655,7 +674,7 @@
             if (tabName === 'geometry') loadGeometryTab();
             if (tabName === 'state') loadStateTab();
             if (tabName === 'cohort') loadCohortTab();
-            if (tabName === 'sql') loadSqlTab();
+            if (tabName === 'derivatives') loadDerivativesTab();
         }
     }
     
@@ -668,7 +687,7 @@
             const entityList = entities.toArray().map(r => r.entity_id);
             
             // Populate all entity dropdowns
-            ['entityFilter', 'vectorEntity', 'geometryEntity', 'stateEntity'].forEach(id => {
+            ['entityFilter', 'vectorEntity', 'geometryEntity', 'stateEntity', 'derivativesEntity'].forEach(id => {
                 const select = document.getElementById(id);
                 if (select) {
                     select.innerHTML = '<option value="">All entities</option>' + 
@@ -885,11 +904,65 @@
         await conn.close();
     }
     
-    function loadSqlTab() {
+    async function loadDerivativesTab() {
+        const conn = await state.db.connect();
+
+        // Show SQL console tables
         const tables = Object.keys(state.tables).filter(t => state.tables[t].loaded);
-        document.getElementById('availableTables').textContent = tables.join(', ');
+        document.getElementById('availableTables').textContent = 'Tables: ' + tables.join(', ');
+
+        // Check if derivatives table exists
+        if (!state.tables.derivatives?.loaded) {
+            document.getElementById('derivativesTable').innerHTML =
+                '<p style="color: var(--text-light);">No derivatives.parquet found. Derivatives are computed from vector data.</p>';
+            document.getElementById('derivativesChart').innerHTML = '';
+            await conn.close();
+            return;
+        }
+
+        // Load derivatives data
+        const data = await conn.query(`SELECT * FROM derivatives LIMIT 100`);
+        renderTable('derivativesTable', data);
+        await conn.close();
+
+        // Render chart
+        await renderDerivativesChart();
     }
-    
+
+    async function renderDerivativesChart() {
+        if (!state.tables.derivatives?.loaded) return;
+
+        const entity = document.getElementById('derivativesEntity').value;
+        const metric = document.getElementById('derivativesMetric').value || 'velocity';
+
+        const conn = await state.db.connect();
+
+        let query = `SELECT timestamp, ${metric} as value FROM derivatives`;
+        if (entity) query += ` WHERE entity_id = '${entity}'`;
+        query += ` ORDER BY timestamp LIMIT 500`;
+
+        try {
+            const data = await conn.query(query);
+            const rows = data.toArray();
+
+            Plotly.newPlot('derivativesChart', [{
+                x: rows.map(r => r.timestamp),
+                y: rows.map(r => r.value),
+                type: 'scatter',
+                mode: 'lines',
+                line: { color: '#f56a6a' }
+            }], {
+                margin: { t: 20, r: 20, b: 40, l: 50 },
+                xaxis: { title: 'Timestamp' },
+                yaxis: { title: metric }
+            }, { responsive: true });
+        } catch (err) {
+            console.error('Derivatives chart error:', err);
+        }
+
+        await conn.close();
+    }
+
     async function runSql() {
         const sql = document.getElementById('sqlInput').value;
         if (!sql.trim()) return;
@@ -975,6 +1048,8 @@
         document.getElementById('geometryMetric')?.addEventListener('change', renderGeometryChart);
         document.getElementById('stateEntity')?.addEventListener('change', renderStateChart);
         document.getElementById('stateMetric')?.addEventListener('change', renderStateChart);
+        document.getElementById('derivativesEntity')?.addEventListener('change', renderDerivativesChart);
+        document.getElementById('derivativesMetric')?.addEventListener('change', renderDerivativesChart);
     });
     </script>
 </body>
