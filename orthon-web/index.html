@@ -571,17 +571,17 @@
     }
     
     function renderFileStatus(expected) {
-        const required = ['vector.parquet', 'geometry.parquet', 'state.parquet', 'cohort.parquet'];
+        const files = ['vector.parquet', 'geometry.parquet', 'state.parquet', 'cohort.parquet', 'derivatives.parquet'];
         let html = '';
-        
-        for (const file of required) {
+
+        for (const file of files) {
             const found = expected[file];
             html += `<div class="file-check">
                 <span class="dot ${found ? 'found' : 'missing'}"></span>
                 <span>${file}</span>
             </div>`;
         }
-        
+
         document.getElementById('fileStatus').innerHTML = html;
     }
     
@@ -648,12 +648,30 @@
     function showDataUI() {
         document.getElementById('welcome').style.display = 'none';
         document.getElementById('filtersSection').style.display = 'block';
-        
-        // Enable tabs
-        document.querySelectorAll('.tab').forEach(tab => {
-            tab.classList.remove('disabled');
-        });
-        
+
+        // Enable summary tab (always available if any data loaded)
+        document.querySelector('.tab[data-tab="summary"]').classList.remove('disabled');
+
+        // Enable tabs only for loaded tables
+        const tabMap = {
+            'vector': 'vector',
+            'geometry': 'geometry',
+            'state': 'state',
+            'cohort': 'cohort',
+            'derivatives': 'derivatives'
+        };
+
+        for (const [table, tabName] of Object.entries(tabMap)) {
+            const tab = document.querySelector(`.tab[data-tab="${tabName}"]`);
+            if (tab) {
+                if (state.tables[table]?.loaded) {
+                    tab.classList.remove('disabled');
+                } else {
+                    tab.classList.add('disabled');
+                }
+            }
+        }
+
         // Show summary tab
         showTab('summary');
     }
@@ -680,21 +698,33 @@
     
     async function populateFilters() {
         const conn = await state.db.connect();
-        
+
         try {
-            // Get unique entities from state table
-            const entities = await conn.query(`SELECT DISTINCT entity_id FROM state ORDER BY entity_id`);
-            const entityList = entities.toArray().map(r => r.entity_id);
-            
+            // Try to get entities from any available table
+            let entityList = [];
+            const tablesToTry = ['state', 'vector', 'geometry', 'cohort', 'derivatives'];
+
+            for (const table of tablesToTry) {
+                if (state.tables[table]?.loaded) {
+                    try {
+                        const entities = await conn.query(`SELECT DISTINCT entity_id FROM ${table} ORDER BY entity_id`);
+                        entityList = entities.toArray().map(r => r.entity_id);
+                        if (entityList.length > 0) break;
+                    } catch (e) {
+                        // Table might not have entity_id column, try next
+                    }
+                }
+            }
+
             // Populate all entity dropdowns
             ['entityFilter', 'vectorEntity', 'geometryEntity', 'stateEntity', 'derivativesEntity'].forEach(id => {
                 const select = document.getElementById(id);
                 if (select) {
-                    select.innerHTML = '<option value="">All entities</option>' + 
+                    select.innerHTML = '<option value="">All entities</option>' +
                         entityList.map(e => `<option value="${e}">${e}</option>`).join('');
                 }
             });
-            
+
             // Get window sizes if available
             if (state.config && state.config.windows) {
                 const windowSelect = document.getElementById('windowFilter');
@@ -704,7 +734,7 @@
         } catch (err) {
             console.error('Error populating filters:', err);
         }
-        
+
         await conn.close();
     }
     
