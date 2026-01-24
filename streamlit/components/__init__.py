@@ -1,6 +1,6 @@
 """Reusable UI components for ORTHON dashboard."""
 
-from streamlit.components.charts import (
+from components.charts import (
     line_chart,
     sparklines,
     radar_chart,
@@ -9,12 +9,12 @@ from streamlit.components.charts import (
     scatter_3d,
     bar_chart,
 )
-from streamlit.components.tables import (
+from components.tables import (
     signal_overview_table,
     typology_table,
     correlation_table,
 )
-from streamlit.components.metrics import metric_row
+from components.metrics import metric_row
 
 __all__ = [
     'line_chart', 'sparklines', 'radar_chart', 'heatmap',

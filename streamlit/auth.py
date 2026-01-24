@@ -145,151 +145,141 @@ def is_logged_in() -> bool:
 
 
 # -----------------------------------------------------------------------------
-# Auth Modal Rendering
+# Auth Modal Rendering (using session state for modal control)
 # -----------------------------------------------------------------------------
 
-@st.dialog("Login")
 def show_login_modal():
-    """Login modal dialog."""
-    email = st.text_input("Email", key="login_email")
-    password = st.text_input("Password", type="password", key="login_password")
-
-    st.markdown("[Forgot Password?](#)")
-
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Login", type="primary", use_container_width=True):
-            if email and password:
-                # Simulate login (in production, validate against database)
-                username = email.split('@')[0]
-                tier = 'academic' if any(email.endswith(d) for d in ['.edu', '.ac.uk']) else 'trial'
-                user = User(username=username, tier=tier, email=email)
-                set_user(user)
-                st.rerun()
-            else:
-                st.error("Please enter email and password")
-
-    st.markdown("---")
-    st.markdown("Don't have an account?")
-    if st.button("Sign Up Free", use_container_width=True):
-        st.session_state.show_signup = True
-        st.rerun()
+    """Login modal using expander (compatible with all Streamlit versions)."""
+    st.session_state.show_login_form = True
 
 
-@st.dialog("Sign Up")
 def show_signup_modal():
-    """Signup modal dialog."""
-    email = st.text_input("Email", key="signup_email")
-
-    tier_option = st.radio(
-        "Account Type",
-        ["Academic (.edu, .ac.uk, etc.)", "Commercial (coming soon)"],
-        key="signup_tier"
-    )
-
-    is_academic = "Academic" in tier_option
-
-    if is_academic:
-        st.markdown("---")
-        st.markdown("**Academic Requirements:**")
-
-        cite_agree = st.checkbox(
-            "I will cite ORTHON in publications using this tool",
-            key="cite_agree"
-        )
-
-        st.markdown("---")
-        ramen = st.selectbox(
-            "Ramen preference",
-            RAMEN_OPTIONS,
-            key="signup_ramen"
-        )
-        st.caption("*(critical research data)*")
-
-        if st.button("Create Account", type="primary", use_container_width=True):
-            errors = []
-            if not email:
-                errors.append("Email required")
-            elif not any(email.endswith(d) for d in ['.edu', '.ac.uk', '.edu.au', '.ac.jp', '.edu.cn']):
-                errors.append("Academic email required (.edu, .ac.uk, etc.)")
-            if not cite_agree:
-                errors.append("Citation agreement required")
-
-            if errors:
-                for e in errors:
-                    st.error(e)
-            else:
-                username = email.split('@')[0]
-                user = User(
-                    username=username,
-                    tier="academic",
-                    email=email,
-                    citation_agreed=True,
-                    ramen_preference=ramen,
-                )
-                set_user(user)
-                st.success(f"Welcome! Your ramen preference ({ramen}) has been noted.")
-                st.rerun()
-
-    else:
-        st.info("Commercial licensing coming soon. Contact us for enterprise inquiries.")
-        waitlist_email = st.text_input("Email for waitlist", key="waitlist_email")
-        if st.button("Join Waitlist", use_container_width=True):
-            if waitlist_email:
-                st.success("Added to waitlist!")
-            else:
-                st.error("Email required")
+    """Signup modal."""
+    st.session_state.show_signup_form = True
 
 
-@st.dialog("Upload Data")
 def show_upload_modal():
-    """Upload data modal dialog."""
-    uploaded_file = st.file_uploader(
-        "Drag & drop or browse",
-        type=['csv', 'parquet', 'xlsx'],
-        key="data_upload"
-    )
+    """Upload modal."""
+    st.session_state.show_upload_form = True
 
-    format_option = st.radio(
-        "Format",
-        ["Wide (columns = signals)", "Long (signal_id, timestamp, value)"],
-        key="upload_format"
-    )
 
-    # Show trial/upload status
-    user = get_current_user()
-    if user is None or user.tier == 'trial':
-        trial_used = st.session_state.get('trial_uploads', 0)
-        remaining = 3 - trial_used
+def render_login_form():
+    """Render login form in sidebar or main area."""
+    if not st.session_state.get('show_login_form'):
+        return
 
-        if remaining > 0:
-            st.info(f"Trial Mode: {remaining} uploads remaining")
-        else:
-            st.warning("Trial limit reached!")
+    with st.sidebar.expander("🔑 Login", expanded=True):
+        email = st.text_input("Email", key="login_email")
+        password = st.text_input("Password", type="password", key="login_password")
 
-        if st.button("Create free account for unlimited", use_container_width=True):
-            st.session_state.show_signup = True
-            st.rerun()
-
-    st.markdown("---")
-
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Cancel", use_container_width=True):
-            st.rerun()
-    with col2:
-        if st.button("Upload & Analyze", type="primary", use_container_width=True):
-            if uploaded_file:
-                # Process upload
-                st.session_state.trial_uploads = st.session_state.get('trial_uploads', 0) + 1
-
-                if user:
-                    user.record_upload()
-
-                st.success("File uploaded successfully!")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Login", type="primary", key="do_login"):
+                if email and password:
+                    username = email.split('@')[0]
+                    tier = 'academic' if any(email.endswith(d) for d in ['.edu', '.ac.uk']) else 'trial'
+                    user = User(username=username, tier=tier, email=email)
+                    set_user(user)
+                    st.session_state.show_login_form = False
+                    st.rerun()
+                else:
+                    st.error("Enter email/password")
+        with col2:
+            if st.button("Cancel", key="cancel_login"):
+                st.session_state.show_login_form = False
                 st.rerun()
+
+        if st.button("Sign Up Instead", key="switch_to_signup"):
+            st.session_state.show_login_form = False
+            st.session_state.show_signup_form = True
+            st.rerun()
+
+
+def render_signup_form():
+    """Render signup form."""
+    if not st.session_state.get('show_signup_form'):
+        return
+
+    with st.sidebar.expander("📝 Sign Up", expanded=True):
+        email = st.text_input("Email", key="signup_email")
+
+        tier_option = st.radio(
+            "Type",
+            ["Academic (.edu)", "Commercial (soon)"],
+            key="signup_tier",
+            horizontal=True
+        )
+
+        is_academic = "Academic" in tier_option
+
+        if is_academic:
+            cite_agree = st.checkbox("I will cite ORTHON", key="cite_agree")
+            ramen = st.selectbox("Ramen?", RAMEN_OPTIONS, key="signup_ramen")
+
+            if st.button("Create Account", type="primary", key="do_signup"):
+                if not email:
+                    st.error("Email required")
+                elif not any(email.endswith(d) for d in ['.edu', '.ac.uk', '.edu.au']):
+                    st.error("Academic email required")
+                elif not cite_agree:
+                    st.error("Citation required")
+                else:
+                    user = User(
+                        username=email.split('@')[0],
+                        tier="academic",
+                        email=email,
+                        citation_agreed=True,
+                        ramen_preference=ramen,
+                    )
+                    set_user(user)
+                    st.session_state.show_signup_form = False
+                    st.rerun()
+        else:
+            st.info("Commercial coming soon")
+
+        if st.button("Cancel", key="cancel_signup"):
+            st.session_state.show_signup_form = False
+            st.rerun()
+
+
+def render_upload_form():
+    """Render upload form."""
+    if not st.session_state.get('show_upload_form'):
+        return
+
+    with st.sidebar.expander("📤 Upload", expanded=True):
+        uploaded_file = st.file_uploader(
+            "CSV, Parquet, or Excel",
+            type=['csv', 'parquet', 'xlsx'],
+            key="data_upload"
+        )
+
+        user = get_current_user()
+        trial_used = st.session_state.get('trial_uploads', 0)
+
+        if user is None or user.tier == 'trial':
+            remaining = 3 - trial_used
+            if remaining > 0:
+                st.caption(f"Trial: {remaining} uploads left")
             else:
-                st.error("Please select a file")
+                st.warning("Trial limit reached")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Upload", type="primary", key="do_upload"):
+                if uploaded_file:
+                    st.session_state.trial_uploads = trial_used + 1
+                    if user:
+                        user.record_upload()
+                    st.session_state.show_upload_form = False
+                    st.success("Uploaded!")
+                    st.rerun()
+                else:
+                    st.error("Select a file")
+        with col2:
+            if st.button("Cancel", key="cancel_upload"):
+                st.session_state.show_upload_form = False
+                st.rerun()
 
 
 # -----------------------------------------------------------------------------
@@ -300,20 +290,19 @@ def render_auth_sidebar():
     """Render upload + auth buttons in sidebar."""
     st.sidebar.markdown("---")
 
-    # Upload button
-    if st.sidebar.button("📤 Upload Data", use_container_width=True, key="sidebar_upload"):
-        show_upload_modal()
-
-    # Auth button / user info
     user = get_current_user()
 
+    # Upload button
+    if st.sidebar.button("📤 Upload Data", use_container_width=True, key="sidebar_upload"):
+        st.session_state.show_upload_form = True
+        st.rerun()
+
+    # Auth button / user info
     if user:
         # Logged in - show user info
         tier_name = TIER_CONFIG[user.tier]['name']
-
-        if st.sidebar.button(f"👤 {user.username}\n{tier_name}", use_container_width=True, key="user_button"):
-            # Could show user settings modal
-            pass
+        st.sidebar.markdown(f"**👤 {user.username}**")
+        st.sidebar.caption(tier_name)
 
         if st.sidebar.button("Logout", use_container_width=True, key="logout_button"):
             logout()
@@ -321,7 +310,13 @@ def render_auth_sidebar():
     else:
         # Not logged in - show login button
         if st.sidebar.button("🔑 Login / Sign Up", use_container_width=True, key="sidebar_auth"):
-            show_login_modal()
+            st.session_state.show_login_form = True
+            st.rerun()
+
+    # Render forms if active
+    render_login_form()
+    render_signup_form()
+    render_upload_form()
 
 
 def render_user_badge():
@@ -392,17 +387,12 @@ def auth_flow() -> bool:
     """
     init_session_state()
 
-    # Check for modal triggers
-    if st.session_state.get('show_signup'):
-        st.session_state.show_signup = False
-        show_signup_modal()
-
-    if st.session_state.get('show_login'):
-        st.session_state.show_login = False
-        show_login_modal()
-
-    if st.session_state.get('show_upload'):
-        st.session_state.show_upload = False
-        show_upload_modal()
+    # Initialize form states if not present
+    if 'show_login_form' not in st.session_state:
+        st.session_state.show_login_form = False
+    if 'show_signup_form' not in st.session_state:
+        st.session_state.show_signup_form = False
+    if 'show_upload_form' not in st.session_state:
+        st.session_state.show_upload_form = False
 
     return True  # Always allow access - no blocking

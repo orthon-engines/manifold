@@ -21,19 +21,59 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 import sys
+import os
 
-# Add parent to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
-sys.path.insert(0, str(Path(__file__).parent))
+# Add paths for imports
+APP_DIR = Path(__file__).parent.resolve()
+ROOT_DIR = APP_DIR.parent
 
-# Auth
+# Ensure both directories are in path
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+if str(APP_DIR) not in sys.path:
+    sys.path.insert(0, str(APP_DIR))
+
+# Change working directory context for relative imports
+os.chdir(APP_DIR)
+
+# Local imports (from streamlit directory)
 from auth import auth_flow, get_current_user, render_auth_sidebar
-
-# Examples
 from components.examples import render_example_buttons, render_example_info
 
-# Classification
-from prism.signal_typology.characterize import characterize, AXES as CHAR_AXES
+# Try to import prism characterization, fall back to local implementation
+try:
+    from prism.signal_typology.characterize import characterize, AXES as CHAR_AXES
+except ImportError:
+    # Fallback: define locally if prism not available
+    CHAR_AXES = {
+        'memory': {'low': 'forgetful', 'high': 'persistent'},
+        'information': {'low': 'predictable', 'high': 'entropic'},
+        'frequency': {'low': 'aperiodic', 'high': 'periodic'},
+        'volatility': {'low': 'stable', 'high': 'clustered'},
+        'dynamics': {'low': 'deterministic', 'high': 'chaotic'},
+        'recurrence': {'low': 'wandering', 'high': 'returning'},
+        'discontinuity': {'low': 'continuous', 'high': 'discontinuous'},
+        'derivatives': {'low': 'smooth', 'high': 'spiky'},
+        'momentum': {'low': 'reverting', 'high': 'trending'},
+    }
+
+    def characterize(score: float, axis: str) -> str:
+        """Fallback characterization."""
+        if pd.isna(score):
+            return 'insufficient data'
+        if axis not in CHAR_AXES:
+            return 'unknown'
+        low, high = CHAR_AXES[axis]['low'], CHAR_AXES[axis]['high']
+        if score < 0.25:
+            return low
+        elif score < 0.40:
+            return f'weak {low}'
+        elif score < 0.60:
+            return 'indeterminate'
+        elif score < 0.75:
+            return f'weak {high}'
+        else:
+            return high
 
 # -----------------------------------------------------------------------------
 # Page Config

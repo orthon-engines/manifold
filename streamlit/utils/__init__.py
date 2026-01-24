@@ -4,7 +4,7 @@ ORTHON Utility Functions
 Visual encoding, characterization, and narrative generation.
 """
 
-from streamlit.utils.visual_encoding import (
+from utils.visual_encoding import (
     color_direct_rgb,
     color_from_dominant,
     color_from_hsl,
