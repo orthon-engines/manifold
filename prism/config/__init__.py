@@ -33,6 +33,32 @@ from prism.config.cascade import (
     get_thresholds,
 )
 
+from prism.config.thresholds import (
+    # Signal Typology
+    TYPOLOGY_CLASSIFICATION,
+    TYPOLOGY_AXIS_THRESHOLDS,
+    TYPOLOGY_TRANSITION,
+    # Structural Geometry
+    GEOMETRY_TOPOLOGY,
+    GEOMETRY_STABILITY,
+    GEOMETRY_LEADERSHIP,
+    GEOMETRY_TRANSITION,
+    # Dynamical Systems
+    DYNAMICS_REGIME,
+    DYNAMICS_STABILITY,
+    DYNAMICS_TRAJECTORY,
+    DYNAMICS_TRANSITION,
+    # Transitions
+    TRANSITION_NUMERIC,
+    TRANSITION_SEVERITY,
+    STATE_TRANSITION,
+    # Helper functions
+    get_typology_thresholds,
+    is_meaningful_change,
+    classify_severity,
+    get_transition_type,
+)
+
 __all__ = [
     # Legacy window config
     'WindowConfig',
@@ -61,4 +87,23 @@ __all__ = [
     'get_cascade_config',
     'get_cascade_config_for_domain',
     'get_thresholds',
+    # ORTHON classification thresholds
+    'TYPOLOGY_CLASSIFICATION',
+    'TYPOLOGY_AXIS_THRESHOLDS',
+    'TYPOLOGY_TRANSITION',
+    'GEOMETRY_TOPOLOGY',
+    'GEOMETRY_STABILITY',
+    'GEOMETRY_LEADERSHIP',
+    'GEOMETRY_TRANSITION',
+    'DYNAMICS_REGIME',
+    'DYNAMICS_STABILITY',
+    'DYNAMICS_TRAJECTORY',
+    'DYNAMICS_TRANSITION',
+    'TRANSITION_NUMERIC',
+    'TRANSITION_SEVERITY',
+    'STATE_TRANSITION',
+    'get_typology_thresholds',
+    'is_meaningful_change',
+    'classify_severity',
+    'get_transition_type',
 ]
