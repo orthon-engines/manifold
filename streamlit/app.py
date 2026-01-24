@@ -1,0 +1,335 @@
+"""
+ORTHON Dashboard
+================
+
+Domain-Agnostic Signal Analysis Framework
+
+Run: streamlit run streamlit/app.py
+
+Navigation flow:
+  SIGNALS → What are they?
+  TYPOLOGY → What kind of signals?
+  GROUPS → Which signals behave similarly?
+  GEOMETRY → How do they relate structurally?
+  DYNAMICS → How do they evolve together?
+  MECHANICS → Why do they move? What drives what?
+  SUMMARY → What does it all mean?
+"""
+
+import streamlit as st
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+# Add parent to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent))
+
+# Auth
+from auth import auth_flow, get_current_user, render_auth_sidebar
+
+# Examples
+from components.examples import render_example_buttons, render_example_info
+
+# Classification
+from prism.signal_typology.characterize import characterize, AXES as CHAR_AXES
+
+# -----------------------------------------------------------------------------
+# Page Config
+# -----------------------------------------------------------------------------
+
+st.set_page_config(
+    page_title="ORTHON",
+    page_icon="◇",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# Compact layout CSS
+st.markdown("""
+<style>
+    /* Sidebar navigation */
+    [data-testid="stSidebar"] .stRadio > div {
+        gap: 0.2rem !important;
+    }
+    [data-testid="stSidebar"] .stRadio label {
+        padding: 0.4rem 0.6rem !important;
+        margin: 0 !important;
+    }
+
+    /* Metrics compact */
+    [data-testid="stMetric"] {
+        padding: 0 !important;
+        gap: 0 !important;
+    }
+    [data-testid="stMetricLabel"],
+    [data-testid="stMetricValue"] {
+        padding: 0 !important;
+        margin: 0 !important;
+    }
+
+    /* General spacing */
+    [data-testid="stVerticalBlock"] {
+        gap: 0.3rem !important;
+    }
+    p, span, li {
+        line-height: 1.2 !important;
+    }
+
+    /* Hide streamlit branding */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+</style>
+""", unsafe_allow_html=True)
+
+# -----------------------------------------------------------------------------
+# Auth Flow
+# -----------------------------------------------------------------------------
+
+if not auth_flow():
+    st.stop()
+
+# -----------------------------------------------------------------------------
+# Data Directory
+# -----------------------------------------------------------------------------
+
+DATA_DIR = Path(__file__).parent.parent / "data"
+
+# Classification helper
+AXES = list(CHAR_AXES.keys())
+
+
+def classify(score: float, axis: str) -> str:
+    """Map 0-1 score to classification label."""
+    if pd.isna(score):
+        return "N/A"
+    if axis not in CHAR_AXES:
+        return "unknown"
+    return characterize(score, axis)
+
+
+# -----------------------------------------------------------------------------
+# Data Loading
+# -----------------------------------------------------------------------------
+
+@st.cache_data
+def load_signals():
+    """Load signal data."""
+    path = DATA_DIR / "signals.parquet"
+    if path.exists():
+        return pd.read_parquet(path)
+    path = DATA_DIR / "observations.parquet"
+    if path.exists():
+        return pd.read_parquet(path)
+    return None
+
+
+@st.cache_data
+def load_typology_profile():
+    """Load signal typology profile scores."""
+    path = DATA_DIR / "signal_typology_profile.parquet"
+    if path.exists():
+        return pd.read_parquet(path)
+    return None
+
+
+@st.cache_data
+def load_typology_metrics():
+    """Load raw signal typology engine metrics."""
+    path = DATA_DIR / "signal_typology_metrics.parquet"
+    if path.exists():
+        return pd.read_parquet(path)
+    return None
+
+
+@st.cache_data
+def load_geometry():
+    """Load structural geometry data."""
+    path = DATA_DIR / "structural_geometry.parquet"
+    if path.exists():
+        return pd.read_parquet(path)
+    return None
+
+
+@st.cache_data
+def load_dynamics():
+    """Load dynamical systems data."""
+    path = DATA_DIR / "dynamical_systems.parquet"
+    if path.exists():
+        return pd.read_parquet(path)
+    return None
+
+
+@st.cache_data
+def load_mechanics():
+    """Load causal mechanics data."""
+    path = DATA_DIR / "causal_mechanics.parquet"
+    if path.exists():
+        return pd.read_parquet(path)
+    return None
+
+
+def check_parquet_exists(filename):
+    """Check if parquet file exists and has data."""
+    path = DATA_DIR / filename
+    if not path.exists():
+        return False
+    try:
+        df = pd.read_parquet(path)
+        return len(df) > 0
+    except:
+        return False
+
+
+# -----------------------------------------------------------------------------
+# Sidebar Navigation
+# -----------------------------------------------------------------------------
+
+st.sidebar.markdown("### ◇ ORTHON")
+
+# Main navigation
+page = st.sidebar.radio(
+    "Navigation",
+    ["Signals", "Typology", "Groups", "Geometry", "Dynamics", "Mechanics", "Summary"],
+    label_visibility="collapsed",
+)
+
+# Upload & Auth buttons
+render_auth_sidebar()
+
+# Example datasets
+render_example_buttons()
+
+st.sidebar.markdown("---")
+
+# Data status
+with st.sidebar.expander("Data Status", expanded=False):
+    files = [
+        ("signals.parquet", "Signals"),
+        ("signal_typology_profile.parquet", "Typology"),
+        ("structural_geometry.parquet", "Geometry"),
+        ("dynamical_systems.parquet", "Dynamics"),
+        ("causal_mechanics.parquet", "Mechanics"),
+    ]
+
+    for filename, label in files:
+        exists = check_parquet_exists(filename)
+        status = "✅" if exists else "⬜"
+        st.text(f"{status} {label}")
+
+# Settings
+with st.sidebar.expander("Settings", expanded=False):
+    st.caption("Settings coming soon")
+
+# Footer
+st.sidebar.markdown("---")
+user = get_current_user()
+if user and user.tier == 'academic' and user.ramen_preference:
+    st.sidebar.caption(f"🍜 {user.ramen_preference}")
+else:
+    st.sidebar.caption("ORTHON • Signal Analysis")
+
+# -----------------------------------------------------------------------------
+# Load Data (check session state first for examples)
+# -----------------------------------------------------------------------------
+
+# Check if example data is loaded in session state
+if 'signals_data' in st.session_state and st.session_state.signals_data is not None:
+    signals = st.session_state.signals_data
+    profile = st.session_state.get('typology_data')
+    geometry = st.session_state.get('geometry_data')
+    dynamics = st.session_state.get('dynamics_data')
+    mechanics = st.session_state.get('mechanics_data')
+    metrics = None  # Examples don't have raw metrics
+
+    # Show example info
+    render_example_info()
+else:
+    # Load from parquet files
+    signals = load_signals()
+    profile = load_typology_profile()
+    metrics = load_typology_metrics()
+    geometry = load_geometry()
+    dynamics = load_dynamics()
+    mechanics = load_mechanics()
+
+# -----------------------------------------------------------------------------
+# Page Routing
+# -----------------------------------------------------------------------------
+
+# Check for signals data
+if signals is None:
+    st.warning("No data loaded. Place `signals.parquet` or `observations.parquet` in the data directory.")
+
+    st.markdown("**Quick Start:**")
+    st.code("python -m fetchers.hydraulic_fetcher", language="bash")
+
+    st.markdown("Or upload your own data in the Signals → Upload tab.")
+    st.stop()
+
+# Route to pages
+if page == "Signals":
+    from pages import signals as signals_page
+    signals_page.render(signals, DATA_DIR)
+
+elif page == "Typology":
+    from pages import typology
+    typology.render(
+        profile_df=profile,
+        metrics_df=metrics,
+        axes=AXES,
+        classify_fn=classify,
+        signals_df=signals,
+    )
+
+elif page == "Groups":
+    from pages import groups
+    if profile is not None:
+        groups.render(
+            profile_df=profile,
+            axes=AXES,
+            classify_fn=classify,
+        )
+    else:
+        st.info("Run signal_typology first to enable group analysis.")
+        st.code("python -m prism.entry_points.signal_typology", language="bash")
+
+elif page == "Geometry":
+    from pages import geometry as geometry_page
+    geometry_page.render(
+        signals_df=signals,
+        geometry_df=geometry,
+        profile_df=profile,
+        data_dir=DATA_DIR,
+    )
+
+elif page == "Dynamics":
+    from pages import dynamics as dynamics_page
+    dynamics_page.render(
+        signals_df=signals,
+        dynamics_df=dynamics,
+        profile_df=profile,
+        axes=AXES,
+        classify_fn=classify,
+        data_dir=DATA_DIR,
+    )
+
+elif page == "Mechanics":
+    from pages import mechanics as mechanics_page
+    mechanics_page.render(
+        signals_df=signals,
+        mechanics_df=mechanics,
+        data_dir=DATA_DIR,
+    )
+
+elif page == "Summary":
+    from pages import summary
+    summary.render(
+        signals_df=signals,
+        profile_df=profile,
+        geometry_df=geometry,
+        dynamics_df=dynamics,
+        mechanics_df=mechanics,
+        data_dir=DATA_DIR,
+    )
