@@ -509,9 +509,16 @@ def check_dataframe(df, column_units: Optional[Dict[str, str]] = None) -> List[S
     all_issues = []
     column_units = column_units or {}
 
-    # Handle pandas DataFrame
+    # Handle DataFrame (pandas or polars)
     if hasattr(df, 'columns'):
-        columns = {col: df[col].tolist() for col in df.columns}
+        columns = {}
+        for col in df.columns:
+            series = df[col]
+            # Polars uses .to_list(), pandas uses .tolist()
+            if hasattr(series, 'to_list'):
+                columns[col] = series.to_list()
+            else:
+                columns[col] = series.tolist()
     else:
         columns = df
 

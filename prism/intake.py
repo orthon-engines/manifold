@@ -175,6 +175,8 @@ class IntakeResult:
 SUFFIX_TO_UNIT = {
     # Pressure
     '_psi': ('psi', 'pressure'),
+    '_psia': ('psia', 'pressure'),  # absolute pressure
+    '_psig': ('psig', 'pressure'),  # gauge pressure
     '_bar': ('bar', 'pressure'),
     '_pa': ('Pa', 'pressure'),
     '_kpa': ('kPa', 'pressure'),
@@ -189,14 +191,22 @@ SUFFIX_TO_UNIT = {
     '_k': ('K', 'temperature'),
     '_degf': ('degF', 'temperature'),
     '_degc': ('degC', 'temperature'),
+    '_degr': ('degR', 'temperature'),
+    '_r': ('degR', 'temperature'),  # Rankine (aerospace)
 
-    # Flow
+    # Volumetric Flow
     '_gpm': ('gpm', 'volumetric_flow'),
     '_lpm': ('L/min', 'volumetric_flow'),
     '_cfm': ('cfm', 'volumetric_flow'),
     '_m3s': ('m3/s', 'volumetric_flow'),
     '_m3h': ('m3/h', 'volumetric_flow'),
     '_bpd': ('bbl/d', 'volumetric_flow'),
+
+    # Mass Flow
+    '_kgs': ('kg/s', 'mass_flow'),
+    '_lbs': ('lb/s', 'mass_flow'),
+    '_lbm_s': ('lb/s', 'mass_flow'),  # aerospace notation
+    '_lbms': ('lb/s', 'mass_flow'),
 
     # Velocity
     '_mps': ('m/s', 'velocity'),
@@ -253,6 +263,12 @@ SUFFIX_TO_UNIT = {
     # Ratio/percentage
     '_pct': ('%', 'ratio'),
     '_percent': ('%', 'ratio'),
+
+    # Energy (specific)
+    '_jkg': ('J/kg', 'specific_enthalpy'),
+    '_kjkg': ('kJ/kg', 'specific_enthalpy'),
+    '_btulb': ('BTU/lb', 'specific_enthalpy'),
+    '_btu_lb': ('BTU/lb', 'specific_enthalpy'),
 }
 
 # Patterns in column names (not just suffixes)
