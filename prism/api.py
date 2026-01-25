@@ -35,6 +35,24 @@ async def health():
     return {"status": "ok", "version": __version__}
 
 
+@app.post("/analyze")
+async def analyze():
+    """Run the PRISM pipeline."""
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "-m", "prism.entry_points.analyze"],
+        capture_output=True,
+        text=True,
+    )
+
+    if result.returncode != 0:
+        return {"status": "error", "message": result.stderr}
+
+    return {"status": "ok", "output": result.stdout}
+
+
 @app.get("/files")
 async def list_files():
     """List available parquet files."""
