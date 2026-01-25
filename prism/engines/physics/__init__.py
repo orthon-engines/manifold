@@ -216,6 +216,29 @@ from prism.engines.physics.reaction_kinetics import (
     equilibrium_constant,
 )
 
+# === CSTR Kinetics (Discipline-specific) ===
+from prism.engines.physics.cstr_kinetics import (
+    conversion_from_concentration,
+    cstr_rate_constant,
+    residence_time,
+    arrhenius_regression,
+    heat_duty_isothermal_cstr,
+    material_balance_cstr,
+    reynolds_number_pipe,
+    analyze_cstr_kinetics,
+)
+
+# === Reaction Output (ORTHON interface) ===
+from prism.engines.physics.reaction_output import (
+    create_reaction_dataframe,
+    create_arrhenius_dataframe,
+    create_material_balance_dataframe,
+    create_energy_balance_dataframe,
+    create_transport_dataframe,
+    write_reaction_outputs,
+    analyze_and_output,
+)
+
 # === Process Control ===
 from prism.engines.physics.process_control import (
     first_order_response,
@@ -364,6 +387,25 @@ __all__ = [
     'pfr_volume',
     'residence_time_distribution',
     'equilibrium_constant',
+
+    # === CSTR Kinetics ===
+    'conversion_from_concentration',
+    'cstr_rate_constant',
+    'residence_time',
+    'arrhenius_regression',
+    'heat_duty_isothermal_cstr',
+    'material_balance_cstr',
+    'reynolds_number_pipe',
+    'analyze_cstr_kinetics',
+
+    # === Reaction Output (ORTHON) ===
+    'create_reaction_dataframe',
+    'create_arrhenius_dataframe',
+    'create_material_balance_dataframe',
+    'create_energy_balance_dataframe',
+    'create_transport_dataframe',
+    'write_reaction_outputs',
+    'analyze_and_output',
 
     # === Process Control ===
     'first_order_response',
