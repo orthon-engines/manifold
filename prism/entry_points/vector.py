@@ -458,10 +458,18 @@ def compute_vector(
     window_size = config['window_size']
     stride = config['stride']
 
+    # Determine index column (accept both 'index' and 'timestamp')
+    if 'index' in observations.columns:
+        index_col = 'index'
+    elif 'timestamp' in observations.columns:
+        index_col = 'timestamp'
+    else:
+        raise ValueError(f"Observations must have 'index' or 'timestamp' column. Found: {observations.columns}")
+
     # Group observations by entity+signal
     signals = observations.group_by(['entity_id', 'signal_id']).agg([
         pl.col('value').alias('values'),
-        pl.col('index').alias('indices'),
+        pl.col(index_col).alias('indices'),
     ])
 
     n_signals = len(signals)

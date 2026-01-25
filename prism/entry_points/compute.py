@@ -42,7 +42,9 @@ logger = logging.getLogger(__name__)
 
 
 # Entry point modules (in dependency order)
-LAYERS = ['vector', 'geometry', 'dynamics', 'state', 'physics', 'fields', 'systems']
+# physics runs early - reads observations directly, no dependencies
+# fields is standalone - requires 3D velocity data
+LAYERS = ['vector', 'physics', 'geometry', 'dynamics', 'state', 'fields', 'systems']
 
 
 def run_entry_point(layer: str, force: bool = False) -> bool:
