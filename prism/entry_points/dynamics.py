@@ -218,16 +218,16 @@ def run_dynamics_engines(
                     **params
                 )
             elif engine_name in ['lyapunov', 'embedding', 'phase_space']:
-                # These work on 1D series - use first principal component or mean
-                series = np.mean(feature_matrix, axis=1)
+                # These work on 1D series - use first column (no inline compute)
+                series = feature_matrix[:, 0] if feature_matrix.ndim > 1 else feature_matrix
                 result = compute_fn(series, **params)
             elif engine_name == 'attractor':
-                # Attractor reconstruction
-                series = np.mean(feature_matrix, axis=1)
+                # Attractor reconstruction - use first column
+                series = feature_matrix[:, 0] if feature_matrix.ndim > 1 else feature_matrix
                 result = compute_fn(series, **params)
             elif engine_name == 'phase_position':
-                # Phase position tracking
-                series = np.mean(feature_matrix, axis=1)
+                # Phase position tracking - use first column
+                series = feature_matrix[:, 0] if feature_matrix.ndim > 1 else feature_matrix
                 result = compute_fn(series, **params)
             elif engine_name == 'basin':
                 # Basin analysis

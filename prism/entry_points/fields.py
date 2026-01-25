@@ -142,24 +142,17 @@ def run_field_engines(
         except Exception as e:
             logger.debug(f"laplace_transform ({signal_id}): {e}")
 
-        # Gradient (first derivative field)
+        # Gradient (first derivative field) - engine returns summary stats
         try:
-            grad = compute_gradient(values)
-            if isinstance(grad, np.ndarray) and len(grad) > 0:
-                results[f"{prefix}_gradient_mean"] = float(np.nanmean(grad))
-                results[f"{prefix}_gradient_std"] = float(np.nanstd(grad))
-                results[f"{prefix}_gradient_max"] = float(np.nanmax(np.abs(grad)))
-                results[f"{prefix}_gradient_skew"] = float(_skewness(grad))
+            result = compute_gradient(values, return_stats=True)
+            _flatten_result(results, f"{prefix}_gradient", result)
         except Exception as e:
             logger.debug(f"gradient ({signal_id}): {e}")
 
-        # Laplacian (second derivative field)
+        # Laplacian (second derivative field) - engine returns summary stats
         try:
-            lap = compute_laplacian(values)
-            if isinstance(lap, np.ndarray) and len(lap) > 0:
-                results[f"{prefix}_laplacian_mean"] = float(np.nanmean(lap))
-                results[f"{prefix}_laplacian_std"] = float(np.nanstd(lap))
-                results[f"{prefix}_laplacian_energy"] = float(np.sum(lap**2))
+            result = compute_laplacian(values, return_stats=True)
+            _flatten_result(results, f"{prefix}_laplacian", result)
         except Exception as e:
             logger.debug(f"laplacian ({signal_id}): {e}")
 
@@ -191,14 +184,10 @@ def run_field_engines(
         except Exception as e:
             logger.debug(f"laplace_energy ({signal_id}): {e}")
 
-        # Multi-scale decomposition
+        # Multi-scale decomposition - engine returns summary stats per scale
         try:
-            result = decompose_by_scale(values)
-            if isinstance(result, dict):
-                for scale, comp in result.items():
-                    if isinstance(comp, np.ndarray) and len(comp) > 0:
-                        results[f"{prefix}_scale_{scale}_energy"] = float(np.sum(comp**2))
-                        results[f"{prefix}_scale_{scale}_std"] = float(np.nanstd(comp))
+            result = decompose_by_scale(values, return_stats=True)
+            _flatten_result(results, f"{prefix}_scale", result)
         except Exception as e:
             logger.debug(f"decompose_scale ({signal_id}): {e}")
 
@@ -215,18 +204,6 @@ def _flatten_result(row: Dict, prefix: str, result: Any):
     elif isinstance(result, (int, float, np.integer, np.floating)):
         if result is not None and np.isfinite(result):
             row[prefix] = float(result)
-
-
-def _skewness(x: np.ndarray) -> float:
-    """Compute skewness of array."""
-    n = len(x)
-    if n < 3:
-        return 0.0
-    m = np.mean(x)
-    s = np.std(x)
-    if s == 0:
-        return 0.0
-    return float(np.mean(((x - m) / s) ** 3))
 
 
 # =============================================================================

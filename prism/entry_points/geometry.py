@@ -200,20 +200,15 @@ def run_geometry_engines(
             params = engine_params.get(engine_name, {})
             result = engine.run(df=feature_df, run_id=run_id, **params)
 
-            # Flatten result into row
+            # Flatten result into row (no inline compute - just pass through)
             if isinstance(result, dict):
                 for k, v in result.items():
                     if isinstance(v, (int, float, np.integer, np.floating)):
                         if np.isfinite(v):
                             results[f"{engine_name}_{k}"] = float(v)
-                    elif isinstance(v, np.ndarray):
-                        # Store small arrays as JSON
-                        if v.size <= 100:
-                            results[f"{engine_name}_{k}_json"] = json.dumps(v.tolist())
-                        else:
-                            # Store stats for large arrays
-                            results[f"{engine_name}_{k}_mean"] = float(np.nanmean(v))
-                            results[f"{engine_name}_{k}_std"] = float(np.nanstd(v))
+                    elif isinstance(v, np.ndarray) and v.size <= 100:
+                        # Store small arrays as JSON, skip large arrays
+                        results[f"{engine_name}_{k}_json"] = json.dumps(v.tolist())
 
         except Exception as e:
             logger.debug(f"{engine_name} failed for {entity_id}: {e}")

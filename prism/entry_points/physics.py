@@ -126,49 +126,24 @@ ENGINES = {
 
 
 # =============================================================================
-# SIGNAL TYPE DETECTION
-# =============================================================================
-
-SIGNAL_KEYWORDS = {
-    'velocity': ['velocity', 'speed', 'vel', 'v_', 'flow', 'rate', 'rpm', 'omega'],
-    'position': ['position', 'pos', 'displacement', 'x_', 'y_', 'z_', 'distance', 'height', 'depth', 'level'],
-    'temperature': ['temp', 'temperature', 't_', 'celsius', 'kelvin', 'fahrenheit'],
-    'pressure': ['pressure', 'pres', 'p_', 'psia', 'psig', 'bar', 'pascal', 'atm'],
-    'force': ['force', 'f_', 'load', 'thrust', 'torque', 'newton'],
-    'concentration': ['conc', 'concentration', 'c_', 'mol', 'ppm', 'percent'],
-    'density': ['density', 'rho', 'specific_gravity'],
-    'viscosity': ['viscosity', 'mu', 'nu', 'kinematic'],
-    'mass': ['mass', 'm_', 'weight', 'kg', 'lb'],
-    'energy': ['energy', 'power', 'watt', 'joule', 'btu'],
-}
-
-
-def classify_signal(signal_id: str) -> str:
-    """Classify a signal based on its name."""
-    signal_lower = signal_id.lower()
-
-    for signal_type, keywords in SIGNAL_KEYWORDS.items():
-        for kw in keywords:
-            if kw in signal_lower:
-                return signal_type
-
-    return 'unknown'
-
-
-def classify_signals(signals: List[str]) -> Dict[str, List[str]]:
-    """Classify all signals by type."""
-    by_type = {}
-    for sig in signals:
-        sig_type = classify_signal(sig)
-        if sig_type not in by_type:
-            by_type[sig_type] = []
-        by_type[sig_type].append(sig)
-    return by_type
-
-
-# =============================================================================
 # CONFIG
 # =============================================================================
+
+def get_signal_types(config: Dict[str, Any], signals: List[str]) -> Dict[str, List[str]]:
+    """
+    Get signal types from config.
+
+    Config should have:
+        physics:
+          signal_types:
+            velocity: [signal_1, signal_2]
+            position: [signal_3]
+            temperature: [signal_4]
+
+    If not configured, returns empty dict (no signals matched to types).
+    """
+    physics_config = config.get('physics', {})
+    return physics_config.get('signal_types', {})
 
 def load_config(data_path: Path) -> Dict[str, Any]:
     """Load config.json or config.yaml from data directory."""
@@ -236,7 +211,7 @@ def run_physics_engines(
     # Get entity signals
     entity_obs = obs_df.filter(pl.col('entity_id') == entity_id)
     signals = entity_obs['signal_id'].unique().to_list()
-    signal_types = classify_signals(signals)
+    signal_types = get_signal_types(config, signals)
 
     # Extract signals by type
     def get_signals_of_type(sig_type):
@@ -330,14 +305,14 @@ def run_physics_engines(
                 except Exception as e:
                     logger.debug(f"momentum ({sig}): {e}")
 
-    if 'work_energy' in enabled_engines and position_signals:
+    if 'work_energy' in enabled_engines and position_signals and spring_constant:
+        # Requires spring_constant to compute force (F = -k*x)
         params = engine_params.get('work_energy', {})
         for sig in position_signals[:2]:
             values = extract_signal_values(obs_df, entity_id, sig)
             if len(values) >= 2:
                 try:
-                    # Derive force from position (F = -k*x for harmonic)
-                    force = -spring_constant * values if spring_constant else np.gradient(values)
+                    force = -spring_constant * values
                     result = compute_work_energy(position=values, force=force, mass=mass, **params)
                     _flatten_result(results, f"work_energy_{sig}", result)
                 except Exception as e:
@@ -388,8 +363,8 @@ def run_physics_engines(
             values = extract_signal_values(obs_df, entity_id, sig)
             if len(values) >= 2:
                 try:
-                    dT_dx = np.gradient(values)
-                    result = compute_heat_flux(k=k, dT_dx=dT_dx, **params)
+                    # Engine computes gradient internally
+                    result = compute_heat_flux(k=k, temperature=values, **params)
                     _flatten_result(results, f"heat_flux_{sig}", result)
                 except Exception as e:
                     logger.debug(f"heat_flux ({sig}): {e}")
@@ -431,9 +406,9 @@ def run_physics_engines(
             vel_values = extract_signal_values(obs_df, entity_id, vel_sig)
             if len(vel_values) >= 2:
                 try:
-                    v_mean = float(np.mean(np.abs(vel_values)))
+                    # Engine handles array input, computes mean internally
                     result = compute_all_dimensionless(
-                        velocity=v_mean,
+                        velocity=vel_values,
                         density=rho,
                         viscosity=mu,
                         specific_heat=cp,
@@ -488,8 +463,8 @@ def run_physics_engines(
                     logger.debug(f"generic potential ({sig}): {e}")
 
                 try:
-                    velocity = np.gradient(values)
-                    result = compute_momentum(velocity=velocity, mass=mass)
+                    # Engine derives velocity from position internally
+                    result = compute_momentum(position=values, mass=mass)
                     _flatten_result(results, f"momentum_{sig}", result)
                 except Exception as e:
                     logger.debug(f"generic momentum ({sig}): {e}")
@@ -527,15 +502,18 @@ def compute_physics(
     entities = obs_df['entity_id'].unique().to_list()
     n_entities = len(entities)
 
-    # Show signal classification summary
+    # Show signal type configuration
     signals = obs_df['signal_id'].unique().to_list()
-    signal_types = classify_signals(signals)
+    signal_types = get_signal_types(config, signals)
 
     logger.info(f"Computing physics for {n_entities} entities")
     logger.info(f"Engines: {list(ENGINES.keys())}")
-    logger.info("Signal classification:")
-    for sig_type, sigs in signal_types.items():
-        logger.info(f"  {sig_type}: {sigs[:5]}{'...' if len(sigs) > 5 else ''}")
+    if signal_types:
+        logger.info("Signal types from config:")
+        for sig_type, sigs in signal_types.items():
+            logger.info(f"  {sig_type}: {sigs[:5]}{'...' if len(sigs) > 5 else ''}")
+    else:
+        logger.warning("No signal_types in config - physics engines may not run. Configure physics.signal_types in config.yaml")
 
     results = []
 
