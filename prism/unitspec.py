@@ -161,6 +161,7 @@ MAGNETIC_FLUX = Dimensions(mass=1, length=2, time=-2, current=-1)
 MAGNETIC_FIELD = Dimensions(mass=1, time=-2, current=-1)
 ENTROPY = Dimensions(mass=1, length=2, time=-2, temperature=-1)
 SPECIFIC_HEAT = Dimensions(length=2, time=-2, temperature=-1)
+SPECIFIC_ENTHALPY = Dimensions(length=2, time=-2)  # J/kg = m^2/s^2
 THERMAL_CONDUCTIVITY = Dimensions(mass=1, length=1, time=-3, temperature=-1)
 MOLAR_MASS = Dimensions(mass=1, amount=-1)
 CONCENTRATION = Dimensions(amount=1, length=-3)
@@ -368,7 +369,7 @@ register_unit("hPa", "hectopascal", PRESSURE, 100.0, aliases=["hectopascal"])
 register_unit("bar", "bar", PRESSURE, 1e5, aliases=["bars"])
 register_unit("mbar", "millibar", PRESSURE, 100.0, aliases=["millibar"])
 register_unit("atm", "atmosphere", PRESSURE, 101325.0, aliases=["atmosphere", "atmospheres"])
-register_unit("psi", "pound per square inch", PRESSURE, 6894.76, aliases=["lb/in2", "lbf/in2", "PSI"])
+register_unit("psi", "pound per square inch", PRESSURE, 6894.76, aliases=["lb/in2", "lbf/in2", "PSI", "psia", "psig"])
 register_unit("ksi", "kilopound per square inch", PRESSURE, 6.89476e6, aliases=["KSI"])
 register_unit("psf", "pound per square foot", PRESSURE, 47.8803, aliases=["lb/ft2", "lbf/ft2"])
 register_unit("torr", "torr", PRESSURE, 133.322, aliases=["Torr"])
@@ -491,7 +492,7 @@ register_unit("g/s", "gram per second", MASS_FLOW, 0.001, aliases=["g/sec"])
 register_unit("g/min", "gram per minute", MASS_FLOW, 1.66667e-5, aliases=[])
 register_unit("t/h", "metric ton per hour", MASS_FLOW, 1000/3600, aliases=["tonne/h"])
 register_unit("t/d", "metric ton per day", MASS_FLOW, 1000/86400, aliases=["tonne/d", "tpd"])
-register_unit("lb/s", "pound per second", MASS_FLOW, 0.453592, aliases=["lb/sec"])
+register_unit("lb/s", "pound per second", MASS_FLOW, 0.453592, aliases=["lb/sec", "lbm/s", "lbm/sec"])
 register_unit("lb/min", "pound per minute", MASS_FLOW, 0.00755987, aliases=["lb/m"])
 register_unit("lb/h", "pound per hour", MASS_FLOW, 0.000125998, aliases=["lb/hr", "pph"])
 register_unit("lb/d", "pound per day", MASS_FLOW, 5.24991e-6, aliases=["ppd"])
@@ -556,6 +557,17 @@ register_unit("BTU/(lb*F)", "BTU per pound-fahrenheit", SPECIFIC_HEAT, 4186.8,
               aliases=["BTU/lb/F"])
 register_unit("cal/(g*C)", "calorie per gram-celsius", SPECIFIC_HEAT, 4184.0,
               aliases=["cal/g/C"])
+
+# -----------------------------------------------------------------------------
+# SPECIFIC ENTHALPY (Energy per mass)
+# -----------------------------------------------------------------------------
+register_unit("J/kg", "joule per kilogram", SPECIFIC_ENTHALPY, 1.0, aliases=["joule/kg"])
+register_unit("kJ/kg", "kilojoule per kilogram", SPECIFIC_ENTHALPY, 1000.0, aliases=["kilojoule/kg"])
+register_unit("MJ/kg", "megajoule per kilogram", SPECIFIC_ENTHALPY, 1e6, aliases=["megajoule/kg"])
+register_unit("BTU/lb", "BTU per pound", SPECIFIC_ENTHALPY, 2326.0, aliases=["BTU/lbm", "Btu/lb", "btu/lb"])
+register_unit("cal/g", "calorie per gram", SPECIFIC_ENTHALPY, 4184.0, aliases=["calorie/g"])
+register_unit("kcal/kg", "kilocalorie per kilogram", SPECIFIC_ENTHALPY, 4184.0, aliases=["Cal/kg"])
+
 register_unit("W/m2", "watt per square meter", Dimensions(mass=1, time=-3), 1.0,
               aliases=["W/m^2"])
 register_unit("BTU/(h*ft2)", "BTU per hour-square foot", Dimensions(mass=1, time=-3), 3.15459,
@@ -965,6 +977,7 @@ class UnitCategory(Enum):
     TORQUE = "torque"
     ANGLE = "angle"
     CONCENTRATION = "concentration"
+    SPECIFIC_ENTHALPY = "specific_enthalpy"
     DIMENSIONLESS = "dimensionless"
 
 
@@ -996,6 +1009,7 @@ CATEGORY_DIMENSIONS = {
     UnitCategory.TORQUE: TORQUE,
     UnitCategory.ANGLE: DIMENSIONLESS,
     UnitCategory.CONCENTRATION: CONCENTRATION,
+    UnitCategory.SPECIFIC_ENTHALPY: SPECIFIC_ENTHALPY,
     UnitCategory.DIMENSIONLESS: DIMENSIONLESS,
 }
 
@@ -1258,7 +1272,7 @@ __all__ = [
     'AREA', 'VOLUME', 'VELOCITY', 'ACCELERATION', 'FREQUENCY', 'FORCE', 'PRESSURE',
     'ENERGY', 'POWER', 'DENSITY', 'DYNAMIC_VISCOSITY', 'KINEMATIC_VISCOSITY',
     'VOLUMETRIC_FLOW', 'MASS_FLOW', 'VOLTAGE', 'RESISTANCE', 'MOMENTUM',
-    'ANGULAR_MOMENTUM', 'MOMENT_OF_INERTIA', 'TORQUE', 'ENTROPY',
+    'ANGULAR_MOMENTUM', 'MOMENT_OF_INERTIA', 'TORQUE', 'ENTROPY', 'SPECIFIC_ENTHALPY',
     'ELECTRIC_FIELD', 'MAGNETIC_FIELD', 'MAGNETIC_FLUX', 'CHARGE',
 
     # Physical constants
