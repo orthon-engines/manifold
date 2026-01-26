@@ -11,8 +11,8 @@ These engines cannot be expressed in SQL. They require:
 - Graph algorithms (mst, clustering)
 - Density estimation (lof)
 - Geometric algorithms (convex_hull)
-- PDE solvers (navier_stokes)
-- Integral transforms (laplace_transform)
+
+Total: 29 core engines
 """
 
 # Memory / Long-range dependence
@@ -60,10 +60,6 @@ from . import convex_hull
 from . import lof
 from . import modes
 
-# Fields / PDEs
-from . import navier_stokes
-from . import laplace_transform
-
 __all__ = [
     # Memory
     'hurst', 'acf_decay', 'spectral_slope',
@@ -80,8 +76,6 @@ __all__ = [
     # State
     'granger', 'transfer_entropy', 'cointegration', 'dtw', 'dmd',
     # Geometry
-    'pca', 'umap', 'clustering', 'mst', 'mutual_info', 
+    'pca', 'umap', 'clustering', 'mst', 'mutual_info',
     'copula', 'divergence', 'convex_hull', 'lof', 'modes',
-    # Fields
-    'navier_stokes', 'laplace_transform',
 ]
