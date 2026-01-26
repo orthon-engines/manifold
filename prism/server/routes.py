@@ -77,19 +77,19 @@ async def compute(request: Request):
 @app.get("/engines")
 async def list_engines():
     """List available engines."""
+    from prism.engines import core, physics
+
+    core_engines = sorted([e for e in dir(core) if not e.startswith('_')])
+
+    physics_engines = {}
+    for subdir in ['fluids', 'thermal', 'thermo', 'chemical', 'mechanical', 'electrical', 'control', 'process']:
+        mod = getattr(physics, subdir)
+        physics_engines[subdir] = sorted([e for e in dir(mod) if not e.startswith('_')])
+
     return {
-        "core": [
-            "hurst", "lyapunov", "fft", "pca", "umap",
-            "garch", "entropy", "wavelet", "rqa",
-            "granger", "transfer_entropy", "cointegration",
-            "dtw", "dmd", "embedding", "mutual_info",
-            "clustering", "mst", "copula", "divergence"
-        ],
-        "physics": [
-            "phase_equilibria", "activity_models",
-            "reaction_kinetics", "separations",
-            "electrochemistry"
-        ]
+        "core": core_engines,
+        "physics": physics_engines,
+        "total": len(core_engines) + sum(len(v) for v in physics_engines.values())
     }
 
 
