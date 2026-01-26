@@ -3,10 +3,11 @@ Chunk Parser
 ============
 
 Parse incoming data chunks (parquet/csv) into rows.
+Uses Polars for efficient parquet handling.
 """
 
 import io
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
 
 def parse_chunk(chunk: bytes, format: str = 'parquet') -> List[Dict[str, Any]]:
@@ -29,39 +30,29 @@ def parse_chunk(chunk: bytes, format: str = 'parquet') -> List[Dict[str, Any]]:
 
 
 def _parse_parquet(chunk: bytes) -> List[Dict[str, Any]]:
-    """Parse parquet bytes."""
+    """Parse parquet bytes using Polars."""
     try:
-        import pyarrow.parquet as pq
+        import polars as pl
         
         buffer = io.BytesIO(chunk)
-        table = pq.read_table(buffer)
+        df = pl.read_parquet(buffer)
         
         # Convert to list of dicts
-        df = table.to_pandas()
-        return df.to_dict('records')
+        return df.to_dicts()
         
     except Exception as e:
         raise ValueError(f"Failed to parse parquet: {e}")
 
 
 def _parse_csv(chunk: bytes) -> List[Dict[str, Any]]:
-    """Parse CSV bytes."""
+    """Parse CSV bytes using Polars."""
     try:
-        import csv
+        import polars as pl
         
         text = chunk.decode('utf-8')
-        reader = csv.DictReader(io.StringIO(text))
+        df = pl.read_csv(io.StringIO(text))
         
-        rows = []
-        for row in reader:
-            rows.append({
-                'entity_id': row.get('entity_id', ''),
-                'signal_id': row.get('signal_id', ''),
-                'index': float(row.get('index', 0)),
-                'value': float(row.get('value', 0))
-            })
-        
-        return rows
+        return df.to_dicts()
         
     except Exception as e:
         raise ValueError(f"Failed to parse CSV: {e}")

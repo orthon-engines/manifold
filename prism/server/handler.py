@@ -42,7 +42,6 @@ def compute_signal(signal_id: str, y: np.ndarray, work_order: WorkOrder) -> Dict
         engines = ['hurst', 'entropy']
     
     if len(y) < 10:
-        # Not enough data
         return result
     
     # Compute each requested engine
@@ -56,37 +55,51 @@ def compute_signal(signal_id: str, y: np.ndarray, work_order: WorkOrder) -> Dict
             elif engine == 'lyapunov':
                 res = core.lyapunov.compute(y)
                 result['lyapunov'] = res.get('lyapunov_exponent')
+                result['lyapunov_method'] = res.get('method')
             
             elif engine == 'fft':
                 res = core.fft.compute(y)
-                # Store dominant frequency and power
-                result['fft_dominant_freq'] = res.get('dominant_freq')
-                result['fft_power'] = res.get('total_power')
+                result['fft_centroid'] = res.get('centroid')
+                result['fft_bandwidth'] = res.get('bandwidth')
             
             elif engine == 'garch':
                 res = core.garch.compute(y)
                 result['garch_omega'] = res.get('omega')
                 result['garch_alpha'] = res.get('alpha')
                 result['garch_beta'] = res.get('beta')
+                result['garch_persistence'] = res.get('persistence')
             
             elif engine == 'entropy':
-                res = core.entropy.compute(y, method='sample')
+                res = core.entropy.compute_sample_entropy(y)
                 result['sample_entropy'] = res.get('sample_entropy')
-                res = core.entropy.compute(y, method='permutation')
+                res = core.entropy.compute_permutation_entropy(y)
                 result['permutation_entropy'] = res.get('permutation_entropy')
             
             elif engine == 'wavelet':
                 res = core.wavelet.compute(y)
-                result['wavelet_energy'] = res.get('energy_by_level')
+                result['wavelet_dominant_scale'] = res.get('dominant_scale')
+                result['wavelet_scale_entropy'] = res.get('scale_entropy')
             
             elif engine == 'rqa':
                 res = core.rqa.compute(y)
-                result['rqa_rr'] = res.get('recurrence_rate')
-                result['rqa_det'] = res.get('determinism')
-                result['rqa_lam'] = res.get('laminarity')
+                result['rqa_recurrence_rate'] = res.get('recurrence_rate')
+                result['rqa_determinism'] = res.get('determinism')
+                result['rqa_laminarity'] = res.get('laminarity')
+                result['rqa_entropy'] = res.get('diagonal_entropy')
+            
+            elif engine == 'granger':
+                # Granger needs pairwise - skip for single signal
+                pass
+            
+            elif engine == 'cointegration':
+                # Cointegration needs pairwise - skip for single signal
+                pass
+            
+            elif engine == 'dtw':
+                # DTW needs pairwise - skip for single signal
+                pass
         
         except Exception as e:
-            # Log but don't fail - partial results are OK
             result[f'{engine}_error'] = str(e)
     
     return result
@@ -108,21 +121,16 @@ def stream_compute_sync(
     Returns:
         Parquet bytes with computed primitives
     """
-    # Parse work order
     work_order = parse_work_order(work_order_header)
     
-    # Detect format
     if format is None:
         format = detect_format(data)
     
-    # Parse all data
     rows = parse_chunk(data, format)
     
-    # Buffer signals
     buffer = SignalBuffer(max_memory_mb=100)
     buffer.add(rows)
     
-    # Compute
     writer = ParquetStreamWriter()
     
     for signal_id in buffer.remaining():
@@ -143,68 +151,45 @@ async def stream_compute_async(
     work_order: WorkOrder,
     format: str = 'parquet'
 ) -> AsyncIterator[bytes]:
-    """
-    Async streaming compute.
-    
-    Process data as it arrives. Yield results as computed.
-    Never hold more than one chunk in memory.
-    
-    Args:
-        upload_stream: Async iterator of data chunks
-        work_order: What to compute
-        format: Input format
-    
-    Yields:
-        Parquet bytes chunks (accumulated, then finalized)
-    """
+    """Async streaming compute."""
     buffer = SignalBuffer(max_memory_mb=100)
     writer = ParquetStreamWriter()
     
-    # Process chunks as they arrive
     async for chunk in upload_stream:
         rows = parse_chunk(chunk, format)
         buffer.add(rows)
         
-        # Compute any signals that are ready
         for signal_id in buffer.ready_signals():
             y = buffer.pop(signal_id)
             result = compute_signal(signal_id, y, work_order)
             writer.write_row(**result)
     
-    # Finalize remaining signals
     for signal_id in buffer.remaining():
         y = buffer.pop(signal_id)
         result = compute_signal(signal_id, y, work_order)
         writer.write_row(**result)
     
-    # Yield final parquet
     yield writer.finalize()
 
 
-# Lambda handler
 def lambda_handler(event, context):
     """AWS Lambda entry point."""
     import base64
     
-    # Get body
     body = event.get('body', '')
     if event.get('isBase64Encoded'):
         body = base64.b64decode(body)
     elif isinstance(body, str):
         body = body.encode('utf-8')
     
-    # Get work order
     headers = event.get('headers', {})
     work_order_header = headers.get('x-work-order') or headers.get('X-Work-Order')
     
-    # Compute
     result = stream_compute_sync(body, work_order_header)
     
     return {
         'statusCode': 200,
-        'headers': {
-            'Content-Type': 'application/octet-stream'
-        },
+        'headers': {'Content-Type': 'application/octet-stream'},
         'body': base64.b64encode(result).decode('utf-8'),
         'isBase64Encoded': True
     }

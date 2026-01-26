@@ -1,21 +1,26 @@
-# PRISM Stream Compute - Minimal Dependencies
+# PRISM Stream Compute - Full Dependencies
 
-# Core scientific
+# Core scientific stack
 numpy>=1.24.0
 scipy>=1.10.0
+pandas>=2.0.0
 
-# Machine learning (for PCA, clustering)
+# Machine learning
 scikit-learn>=1.2.0
 
-# Dimensionality reduction
-umap-learn>=0.5.0
-
-# Parquet I/O
+# Parquet I/O (using Polars for speed)
+polars>=0.20.0
 pyarrow>=12.0.0
 
-# GARCH volatility modeling
-arch>=6.0.0
+# Time series analysis
+nolds>=0.5.0           # Lyapunov, correlation dimension
+arch>=6.0.0            # GARCH volatility
+PyWavelets>=1.4.0      # Wavelet transforms
+statsmodels>=0.14.0    # Cointegration, time series
 
 # Server
 fastapi>=0.100.0
 uvicorn>=0.23.0
+
+# Optional (for extended features)
+# umap-learn>=0.5.0    # UMAP dimensionality reduction
