@@ -11,22 +11,35 @@
 -- Foundation for entropy calculations
 
 CREATE OR REPLACE VIEW v_binned_distribution AS
-WITH bin_counts AS (
+WITH binned AS (
     SELECT
         signal_id,
-        NTILE(20) OVER (PARTITION BY signal_id ORDER BY y) AS bin_id,
-        COUNT(*) OVER (PARTITION BY signal_id, NTILE(20) OVER (PARTITION BY signal_id ORDER BY y)) AS bin_count,
-        COUNT(*) OVER (PARTITION BY signal_id) AS total_count
+        NTILE(20) OVER (PARTITION BY signal_id ORDER BY y) AS bin_id
     FROM v_base
+),
+bin_counts AS (
+    SELECT
+        signal_id,
+        bin_id,
+        COUNT(*) AS bin_count
+    FROM binned
+    GROUP BY signal_id, bin_id
+),
+totals AS (
+    SELECT
+        signal_id,
+        SUM(bin_count) AS total_count
+    FROM bin_counts
+    GROUP BY signal_id
 )
 SELECT
-    signal_id,
-    bin_id,
-    MAX(bin_count) AS bin_count,
-    MAX(total_count) AS total_count,
-    MAX(bin_count)::FLOAT / MAX(total_count) AS probability
-FROM bin_counts
-GROUP BY signal_id, bin_id;
+    bc.signal_id,
+    bc.bin_id,
+    bc.bin_count,
+    t.total_count,
+    bc.bin_count::FLOAT / t.total_count AS probability
+FROM bin_counts bc
+JOIN totals t USING (signal_id);
 
 
 -- ============================================================================
@@ -55,22 +68,35 @@ GROUP BY signal_id;
 -- Entropy of the rate of change
 
 CREATE OR REPLACE VIEW v_derivative_entropy AS
-WITH dy_binned AS (
+WITH binned AS (
     SELECT
         signal_id,
-        NTILE(20) OVER (PARTITION BY signal_id ORDER BY dy) AS bin_id,
-        COUNT(*) OVER (PARTITION BY signal_id, NTILE(20) OVER (PARTITION BY signal_id ORDER BY dy)) AS bin_count,
-        COUNT(*) OVER (PARTITION BY signal_id) AS total_count
+        NTILE(20) OVER (PARTITION BY signal_id ORDER BY dy) AS bin_id
     FROM v_dy
     WHERE dy IS NOT NULL
 ),
-probs AS (
+bin_counts AS (
     SELECT
         signal_id,
         bin_id,
-        MAX(bin_count)::FLOAT / MAX(total_count) AS probability
-    FROM dy_binned
+        COUNT(*) AS bin_count
+    FROM binned
     GROUP BY signal_id, bin_id
+),
+totals AS (
+    SELECT
+        signal_id,
+        SUM(bin_count) AS total_count
+    FROM bin_counts
+    GROUP BY signal_id
+),
+probs AS (
+    SELECT
+        bc.signal_id,
+        bc.bin_id,
+        bc.bin_count::FLOAT / t.total_count AS probability
+    FROM bin_counts bc
+    JOIN totals t USING (signal_id)
 )
 SELECT
     signal_id,
@@ -317,28 +343,59 @@ GROUP BY signal_id, I;
 -- ============================================================================
 
 CREATE OR REPLACE VIEW v_information_gain AS
-WITH entropy_by_half AS (
+WITH midpoints AS (
     SELECT
         signal_id,
-        CASE WHEN I < MAX(I) OVER (PARTITION BY signal_id) / 2 THEN 'first_half' ELSE 'second_half' END AS half,
-        y
+        MAX(I) / 2 AS midpoint
     FROM v_base
+    GROUP BY signal_id
+),
+entropy_by_half AS (
+    SELECT
+        b.signal_id,
+        CASE WHEN b.I < m.midpoint THEN 'first_half' ELSE 'second_half' END AS half,
+        b.y
+    FROM v_base b
+    JOIN midpoints m USING (signal_id)
+),
+binned AS (
+    SELECT
+        signal_id,
+        half,
+        NTILE(20) OVER (PARTITION BY signal_id, half ORDER BY y) AS bin_id
+    FROM entropy_by_half
+),
+bin_counts AS (
+    SELECT
+        signal_id,
+        half,
+        bin_id,
+        COUNT(*) AS cnt
+    FROM binned
+    GROUP BY signal_id, half, bin_id
+),
+totals AS (
+    SELECT
+        signal_id,
+        half,
+        SUM(cnt) AS total
+    FROM bin_counts
+    GROUP BY signal_id, half
+),
+probs AS (
+    SELECT
+        bc.signal_id,
+        bc.half,
+        bc.cnt::FLOAT / t.total AS probability
+    FROM bin_counts bc
+    JOIN totals t USING (signal_id, half)
 ),
 half_entropy AS (
     SELECT
         signal_id,
         half,
-        COUNT(*) AS n,
-        -SUM((cnt::FLOAT / total) * LN(cnt::FLOAT / total + 1e-10)) AS half_entropy
-    FROM (
-        SELECT 
-            signal_id,
-            half,
-            NTILE(20) OVER (PARTITION BY signal_id, half ORDER BY y) AS bin,
-            COUNT(*) OVER (PARTITION BY signal_id, half, NTILE(20) OVER (PARTITION BY signal_id, half ORDER BY y)) AS cnt,
-            COUNT(*) OVER (PARTITION BY signal_id, half) AS total
-        FROM entropy_by_half
-    ) sub
+        -SUM(probability * LN(probability + 1e-10)) AS half_entropy
+    FROM probs
     GROUP BY signal_id, half
 )
 SELECT

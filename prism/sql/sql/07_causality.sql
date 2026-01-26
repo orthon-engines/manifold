@@ -12,11 +12,20 @@
 -- Simplified: compare corr(X_lag, Y) vs corr(Y_lag, Y)
 
 CREATE OR REPLACE VIEW v_granger_proxy AS
-WITH own_prediction AS (
+WITH lagged AS (
     SELECT
         signal_id,
-        CORR(y, LAG(y, 10) OVER (PARTITION BY signal_id ORDER BY I)) AS self_prediction
+        I,
+        y,
+        LAG(y, 10) OVER (PARTITION BY signal_id ORDER BY I) AS y_lag10
     FROM v_base
+),
+own_prediction AS (
+    SELECT
+        signal_id,
+        CORR(y, y_lag10) AS self_prediction
+    FROM lagged
+    WHERE y_lag10 IS NOT NULL
     GROUP BY signal_id
 ),
 cross_prediction AS (
@@ -103,22 +112,24 @@ binned AS (
         NTILE(5) OVER (PARTITION BY signal_id ORDER BY y_lag1) AS y_lag_bin
     FROM lagged_data
     WHERE y_lag1 IS NOT NULL
+),
+binned_with_changes AS (
+    SELECT
+        signal_id,
+        I,
+        y_bin,
+        y_bin - COALESCE(LAG(y_bin) OVER (PARTITION BY signal_id ORDER BY I), y_bin) AS y_bin_change
+    FROM binned
 )
 -- Cross-signal conditional entropy approximation
 SELECT
     a.signal_id AS source,
     b.signal_id AS target,
     -- Simplified: correlation of changes as proxy for information transfer
-    CORR(
-        a.y_bin - COALESCE(LAG(a.y_bin) OVER (PARTITION BY a.signal_id ORDER BY a.I), a.y_bin),
-        b.y_bin - COALESCE(LAG(b.y_bin) OVER (PARTITION BY b.signal_id ORDER BY b.I), b.y_bin)
-    ) AS change_correlation,
-    ABS(CORR(
-        a.y_bin - COALESCE(LAG(a.y_bin) OVER (PARTITION BY a.signal_id ORDER BY a.I), a.y_bin),
-        b.y_bin - COALESCE(LAG(b.y_bin) OVER (PARTITION BY b.signal_id ORDER BY b.I), b.y_bin)
-    )) AS transfer_entropy_proxy
-FROM binned a
-JOIN binned b ON a.I = b.I + 5 AND a.signal_id != b.signal_id  -- Source leads by 5
+    CORR(a.y_bin_change, b.y_bin_change) AS change_correlation,
+    ABS(CORR(a.y_bin_change, b.y_bin_change)) AS transfer_entropy_proxy
+FROM binned_with_changes a
+JOIN binned_with_changes b ON a.I = b.I + 5 AND a.signal_id != b.signal_id  -- Source leads by 5
 GROUP BY a.signal_id, b.signal_id;
 
 
@@ -131,10 +142,10 @@ GROUP BY a.signal_id, b.signal_id;
 
 CREATE OR REPLACE VIEW v_causal_roles AS
 WITH out_degree AS (
-    SELECT source AS signal_id, COUNT(*) AS n_causes
+    SELECT signal_a AS signal_id, COUNT(*) AS n_causes
     FROM v_bidirectional_causality
     WHERE causal_direction IN ('A_causes_B', 'bidirectional')
-    GROUP BY source
+    GROUP BY signal_a
 ),
 in_degree AS (
     SELECT signal_b AS signal_id, COUNT(*) AS n_caused_by
@@ -143,9 +154,9 @@ in_degree AS (
     GROUP BY signal_b
 ),
 total_influence AS (
-    SELECT source AS signal_id, SUM(net_causal_flow) AS total_out_flow
+    SELECT signal_a AS signal_id, SUM(net_causal_flow) AS total_out_flow
     FROM v_bidirectional_causality
-    GROUP BY source
+    GROUP BY signal_a
 )
 SELECT
     COALESCE(o.signal_id, i.signal_id) AS signal_id,
@@ -173,7 +184,7 @@ LEFT JOIN total_influence tf USING (signal_id);
 
 CREATE OR REPLACE VIEW v_causal_chains AS
 WITH direct_causes AS (
-    SELECT source, target
+    SELECT signal_a AS source, signal_b AS target
     FROM v_bidirectional_causality
     WHERE causal_direction IN ('A_causes_B')
 )
@@ -230,7 +241,7 @@ WITH source_shocks AS (
     SELECT
         r.signal_id AS source,
         r.I AS shock_I,
-        r.mean_change AS shock_magnitude
+        r.change_score AS shock_magnitude  -- Use change_score instead of mean_change
     FROM v_regime_changes r
     WHERE r.is_regime_change
 ),

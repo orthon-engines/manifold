@@ -14,23 +14,22 @@ SELECT
     b.signal_id,
     b.I,
     b.y,
-    
-    -- UMAP coordinates from PRISM (if available)
-    p.umap_coords[1] AS x,
-    p.umap_coords[2] AS y_coord,
-    p.umap_coords[3] AS z,
-    
+
     -- Fallback: local approximation using y, dy, d2y as coordinates
-    COALESCE(p.umap_coords[1], c.y) AS phase_x,
-    COALESCE(p.umap_coords[2], c.dy * 10) AS phase_y,  -- scaled for visibility
-    COALESCE(p.umap_coords[3], c.kappa * 100) AS phase_z,
-    
+    -- (PRISM UMAP coordinates can be joined later if available)
+    NULL::FLOAT AS x,
+    NULL::FLOAT AS y_coord,
+    NULL::FLOAT AS z,
+
+    c.y AS phase_x,
+    COALESCE(c.dy * 10, 0) AS phase_y,  -- scaled for visibility
+    COALESCE(c.kappa * 100, 0) AS phase_z,
+
     -- Source info
-    CASE WHEN p.umap_coords IS NOT NULL THEN 'umap' ELSE 'local' END AS coord_source
+    'local' AS coord_source
 
 FROM v_base b
-LEFT JOIN v_curvature c ON b.signal_id = c.signal_id AND b.I = c.I
-LEFT JOIN primitives p ON b.signal_id = p.signal_id;
+LEFT JOIN v_curvature c ON b.signal_id = c.signal_id AND b.I = c.I;
 
 
 -- ============================================================================
@@ -38,41 +37,48 @@ LEFT JOIN primitives p ON b.signal_id = p.signal_id;
 -- ============================================================================
 -- Each signal's path through phase space
 
-CREATE OR REPLACE VIEW v_trajectory AS
+-- First compute phase velocity, then cumulative arc length
+CREATE OR REPLACE VIEW v_trajectory_base AS
 SELECT
     ps.signal_id,
     ps.I,
     ps.phase_x,
     ps.phase_y,
     ps.phase_z,
-    
-    -- Metadata
     sc.signal_class,
     st.behavioral_type,
     ra.regime_id,
     rs.regime_mean,
     rs.regime_std,
-    
     -- Velocity in phase space
     SQRT(
-        POWER(ps.phase_x - LAG(ps.phase_x) OVER w, 2) +
-        POWER(ps.phase_y - LAG(ps.phase_y) OVER w, 2) +
-        POWER(ps.phase_z - LAG(ps.phase_z) OVER w, 2)
-    ) AS phase_velocity,
-    
-    -- Arc length (cumulative distance traveled)
-    SUM(SQRT(
-        POWER(ps.phase_x - LAG(ps.phase_x) OVER w, 2) +
-        POWER(ps.phase_y - LAG(ps.phase_y) OVER w, 2) +
-        POWER(ps.phase_z - LAG(ps.phase_z) OVER w, 2)
-    )) OVER (PARTITION BY ps.signal_id ORDER BY ps.I) AS arc_length
-
+        COALESCE(POWER(ps.phase_x - LAG(ps.phase_x) OVER w, 2), 0) +
+        COALESCE(POWER(ps.phase_y - LAG(ps.phase_y) OVER w, 2), 0) +
+        COALESCE(POWER(ps.phase_z - LAG(ps.phase_z) OVER w, 2), 0)
+    ) AS phase_velocity
 FROM v_phase_space ps
 LEFT JOIN v_signal_class sc USING (signal_id)
 LEFT JOIN v_signal_typology st USING (signal_id)
 LEFT JOIN v_regime_assignment ra ON ps.signal_id = ra.signal_id AND ps.I = ra.I
 LEFT JOIN v_regime_stats rs ON ra.signal_id = rs.signal_id AND ra.regime_id = rs.regime_id
 WINDOW w AS (PARTITION BY ps.signal_id ORDER BY ps.I);
+
+CREATE OR REPLACE VIEW v_trajectory AS
+SELECT
+    signal_id,
+    I,
+    phase_x,
+    phase_y,
+    phase_z,
+    signal_class,
+    behavioral_type,
+    regime_id,
+    regime_mean,
+    regime_std,
+    phase_velocity,
+    -- Arc length (cumulative distance traveled)
+    SUM(COALESCE(phase_velocity, 0)) OVER (PARTITION BY signal_id ORDER BY I) AS arc_length
+FROM v_trajectory_base;
 
 
 -- ============================================================================
@@ -108,18 +114,17 @@ SELECT
     
     -- Aggregate regime info
     (SELECT COUNT(DISTINCT regime_id) FROM v_regime_assignment ra WHERE ra.signal_id = sc.signal_id) AS n_regimes,
-    
-    -- PRISM results if available
-    prim.hurst,
-    prim.lyapunov,
-    prim.sample_entropy
+
+    -- PRISM results (placeholders - join with primitives table if available)
+    NULL::FLOAT AS hurst,
+    NULL::FLOAT AS lyapunov,
+    NULL::FLOAT AS sample_entropy
 
 FROM v_signal_class sc
 LEFT JOIN v_signal_typology st USING (signal_id)
 LEFT JOIN v_stats_global sg USING (signal_id)
 LEFT JOIN v_causal_roles cr USING (signal_id)
-LEFT JOIN v_entropy_complete ec USING (signal_id)
-LEFT JOIN primitives prim USING (signal_id);
+LEFT JOIN v_entropy_complete ec USING (signal_id);
 
 
 -- ============================================================================
@@ -228,7 +233,7 @@ SELECT
     signal_id,
     I AS alert_at,
     'Regime change detected' AS description,
-    total_change_score AS severity
+    change_score AS severity
 FROM v_regime_changes
 WHERE is_regime_change
 
@@ -238,7 +243,7 @@ UNION ALL
 SELECT
     'chaos_suspected' AS alert_type,
     signal_id,
-    NULL AS alert_at,
+    NULL::FLOAT AS alert_at,
     'Chaotic behavior suspected' AS description,
     sensitivity_ratio AS severity
 FROM v_chaos_proxy
@@ -251,9 +256,10 @@ SELECT
     'bifurcation' AS alert_type,
     signal_id,
     bifurcation_point AS alert_at,
-    'Possible bifurcation: ' || bifurcation_type AS description,
-    bifurcation_score AS severity
+    'Possible bifurcation: ' || COALESCE(bifurcation_type, 'unknown') AS description,
+    kappa_jump AS severity
 FROM v_bifurcation_candidates
+WHERE bifurcation_type IS NOT NULL
 
 UNION ALL
 
@@ -304,20 +310,20 @@ FROM v_classification_complete;
 -- Signal Typology Output
 CREATE OR REPLACE VIEW v_export_signal_typology AS
 SELECT
-    signal_id,
-    I,
-    y,
-    signal_class,
-    behavioral_type,
-    persistence_class,
-    is_periodic,
-    is_stationary,
-    has_volatility_clustering,
-    chaos_suspected,
-    hurst,
-    lyapunov
+    st.signal_id,
+    b.I,
+    b.y,
+    st.signal_class,
+    st.behavioral_type,
+    st.persistence_class,
+    st.is_periodic,
+    st.is_stationary,
+    st.has_volatility_clustering,
+    st.chaos_suspected,
+    st.hurst,
+    st.lyapunov
 FROM v_signal_typology st
-JOIN v_base b USING (signal_id);
+JOIN v_base b ON st.signal_id = b.signal_id;
 
 -- Behavioral Geometry Output
 CREATE OR REPLACE VIEW v_export_behavioral_geometry AS
@@ -344,8 +350,7 @@ SELECT
     regime_std,
     stability_state,
     is_locally_stable,
-    phase_velocity,
-    recurrence_rate
+    phase_velocity
 FROM v_dynamics_complete;
 
 -- Causal Mechanics Output
@@ -365,54 +370,28 @@ FROM v_causality_complete;
 -- ============================================================================
 -- 009: MANIFOLD JSON EXPORT (for viewer)
 -- ============================================================================
+-- NOTE: Use these views separately for JSON export in application code
+-- DuckDB json_group_array has different semantics than SQLite
 
-CREATE OR REPLACE VIEW v_export_manifold_json AS
+-- Simplified: Export signals as JSON array
+CREATE OR REPLACE VIEW v_export_signals_json AS
 SELECT
-    json_object(
-        'signals', (
-            SELECT json_group_array(json_object(
-                'id', signal_id,
-                'class', signal_class,
-                'type', behavioral_type,
-                'role', causal_role,
-                'n_points', n_points
-            ))
-            FROM v_signal_summary
-        ),
-        'trajectories', (
-            SELECT json_group_array(json_object(
-                'signal_id', signal_id,
-                'I', I,
-                'x', phase_x,
-                'y', phase_y,
-                'z', phase_z,
-                'regime', regime_id
-            ))
-            FROM v_trajectory
-        ),
-        'edges', (
-            SELECT json_group_array(json_object(
-                'source', source,
-                'target', target,
-                'weight', optimal_correlation,
-                'type', relationship_strength
-            ))
-            FROM v_coupling_summary
-            WHERE relationship_strength != 'weak'
-        ),
-        'alerts', (
-            SELECT json_group_array(json_object(
-                'type', alert_type,
-                'signal', signal_id,
-                'at', alert_at,
-                'description', description,
-                'severity', severity
-            ))
-            FROM v_alerts
-            ORDER BY severity DESC
-            LIMIT 100
-        )
-    ) AS manifold_data;
+    LIST(
+        {'id': signal_id, 'class': signal_class, 'type': behavioral_type, 'role': causal_role, 'n_points': n_points}
+    ) AS signals_json
+FROM v_signal_summary;
+
+-- Export alerts sorted by severity
+CREATE OR REPLACE VIEW v_export_alerts_json AS
+SELECT
+    alert_type,
+    signal_id,
+    alert_at,
+    description,
+    severity
+FROM v_alerts
+ORDER BY severity DESC NULLS LAST
+LIMIT 100;
 
 
 -- ============================================================================

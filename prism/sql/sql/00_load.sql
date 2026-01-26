@@ -8,7 +8,13 @@
 -- ============================================================================
 -- 001: CREATE BASE VIEW FROM OBSERVATIONS
 -- ============================================================================
--- observations.parquet must have: entity_id, signal_id, I (index), y (value)
+-- observations.parquet schema:
+--   entity_id  : str   - Entity identifier
+--   signal_id  : str   - Signal name
+--   index      : float - X-axis (time, cycle, depth, etc.)
+--   value      : float - Y-axis measurement
+--
+-- Note: Some files use 'timestamp' for index column - this is handled below.
 
 CREATE OR REPLACE VIEW v_base AS
 SELECT
@@ -16,10 +22,10 @@ SELECT
     signal_id,
     I,
     y,
-    -- Metadata columns (optional, may be NULL)
-    value_unit,
-    index_dimension,
-    signal_class
+    -- Metadata columns (NULL if not present in source)
+    NULL AS value_unit,
+    NULL AS index_dimension,
+    NULL AS signal_class
 FROM observations;
 
 

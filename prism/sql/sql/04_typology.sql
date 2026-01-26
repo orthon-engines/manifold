@@ -133,7 +133,7 @@ WITH volatility AS (
     WHERE dy IS NOT NULL
 )
 SELECT
-    signal_id,
+    a.signal_id,
     CORR(a.local_volatility, b.local_volatility) AS volatility_autocorr,
     CASE
         WHEN CORR(a.local_volatility, b.local_volatility) > 0.3 THEN TRUE
@@ -177,40 +177,36 @@ JOIN vol_stats v USING (signal_id);
 
 
 -- ============================================================================
--- 006: PERSISTENCE CLASSIFICATION (uses PRISM Hurst if available)
+-- 006: PERSISTENCE CLASSIFICATION (uses autocorrelation as proxy)
 -- ============================================================================
--- If Hurst available: use it. Otherwise: use autocorrelation proxy
+-- If PRISM primitives table exists and has hurst, it will be joined later.
+-- This view uses autocorrelation as the base proxy for persistence.
+
+CREATE OR REPLACE VIEW v_autocorr_lag1 AS
+SELECT
+    a.signal_id,
+    CORR(a.y, b.y) AS autocorr_lag1
+FROM v_base a
+JOIN v_base b ON a.signal_id = b.signal_id AND a.I = b.I + 1
+GROUP BY a.signal_id;
 
 CREATE OR REPLACE VIEW v_persistence AS
 SELECT
     signal_id,
-    
-    -- Use PRISM Hurst if available (via LEFT JOIN to primitives)
-    p.hurst,
-    
+
     -- Autocorrelation-based proxy for persistence
-    ac.autocorr_lag1,
-    
-    -- Classification
+    autocorr_lag1,
+
+    -- Classification based on autocorrelation
     CASE
-        -- PRISM Hurst available
-        WHEN p.hurst IS NOT NULL AND p.hurst > 0.6 THEN 'trending'
-        WHEN p.hurst IS NOT NULL AND p.hurst < 0.4 THEN 'mean_reverting'
-        WHEN p.hurst IS NOT NULL THEN 'random'
-        
-        -- Fallback to autocorrelation
-        WHEN ac.autocorr_lag1 > 0.5 THEN 'trending'
-        WHEN ac.autocorr_lag1 < -0.2 THEN 'mean_reverting'
+        WHEN autocorr_lag1 > 0.5 THEN 'trending'
+        WHEN autocorr_lag1 < -0.2 THEN 'mean_reverting'
         ELSE 'random'
     END AS persistence_class,
-    
-    CASE
-        WHEN p.hurst IS NOT NULL THEN 'prism_hurst'
-        ELSE 'autocorr_proxy'
-    END AS persistence_source
 
-FROM v_autocorr_lag1 ac
-LEFT JOIN primitives p USING (signal_id);  -- primitives table from PRISM
+    'autocorr_proxy' AS persistence_source
+
+FROM v_autocorr_lag1;
 
 
 -- ============================================================================
@@ -333,18 +329,17 @@ SELECT
     p.persistence_source,
     cp.chaos_suspected,
     
-    -- From PRISM if available
-    prim.hurst,
-    prim.lyapunov
-    
+    -- Placeholders for PRISM data (joined later if available)
+    NULL::FLOAT AS hurst,
+    NULL::FLOAT AS lyapunov
+
 FROM v_signal_class sc
 LEFT JOIN v_trend_detection t USING (signal_id)
 LEFT JOIN v_mean_reversion mr USING (signal_id)
 LEFT JOIN v_stationarity st USING (signal_id)
 LEFT JOIN v_volatility_clustering vc USING (signal_id)
 LEFT JOIN v_persistence p USING (signal_id)
-LEFT JOIN v_chaos_proxy cp USING (signal_id)
-LEFT JOIN primitives prim USING (signal_id);
+LEFT JOIN v_chaos_proxy cp USING (signal_id);
 
 
 -- ============================================================================
@@ -354,49 +349,49 @@ LEFT JOIN primitives prim USING (signal_id);
 
 CREATE OR REPLACE VIEW v_prism_requests AS
 SELECT
-    signal_id,
-    signal_class,
-    
+    sc.signal_id,
+    sc.signal_class,
+
     -- Request Hurst for analog signals where persistence matters
-    CASE 
-        WHEN signal_class = 'analog' AND NOT is_periodic THEN TRUE
+    CASE
+        WHEN sc.signal_class = 'analog' AND NOT sc.is_periodic THEN TRUE
         ELSE FALSE
     END AS needs_hurst,
-    
+
     -- Request Lyapunov if chaos suspected
     CASE
         WHEN cp.chaos_suspected THEN TRUE
         ELSE FALSE
     END AS needs_lyapunov,
-    
+
     -- Request FFT for periodic signals or frequency analysis
     CASE
-        WHEN signal_class = 'periodic' THEN TRUE
-        WHEN is_periodic THEN TRUE
+        WHEN sc.signal_class = 'periodic' THEN TRUE
+        WHEN sc.is_periodic THEN TRUE
         ELSE FALSE
     END AS needs_fft,
-    
+
     -- Request GARCH if volatility clustering detected
     CASE
         WHEN vc.has_volatility_clustering THEN TRUE
         ELSE FALSE
     END AS needs_garch,
-    
+
     -- Request wavelet for multi-scale analysis
     CASE
-        WHEN signal_class IN ('analog', 'periodic') AND NOT st.is_stationary THEN TRUE
+        WHEN sc.signal_class IN ('analog', 'periodic') AND NOT st.is_stationary THEN TRUE
         ELSE FALSE
     END AS needs_wavelet,
-    
+
     -- Request RQA if chaos suspected and long enough
     CASE
         WHEN cp.chaos_suspected AND sg.n_points > 500 THEN TRUE
         ELSE FALSE
     END AS needs_rqa,
-    
+
     -- Request sample entropy for complexity
     CASE
-        WHEN signal_class = 'analog' AND NOT is_periodic THEN TRUE
+        WHEN sc.signal_class = 'analog' AND NOT sc.is_periodic THEN TRUE
         ELSE FALSE
     END AS needs_sample_entropy
 

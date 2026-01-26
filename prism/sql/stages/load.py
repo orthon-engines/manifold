@@ -22,13 +22,38 @@ class LoadStage(StageOrchestrator):
 
     DEPENDS_ON = []  # First stage, no dependencies
 
+    # Column mapping: source -> canonical
+    COLUMN_MAP = {
+        'timestamp': 'I',      # index column alternatives
+        'index': 'I',
+        'time': 'I',
+        'value': 'y',          # value column alternatives
+    }
+
     def load_observations(self, path: str) -> None:
         """
         Load observations parquet into database.
 
-        PURE: Just creates table from file. No transformation.
+        Handles column renaming to canonical schema:
+          entity_id, signal_id, I (index), y (value)
+
+        PURE: Just column aliasing, no computation.
         """
-        self.conn.execute(f"CREATE OR REPLACE TABLE observations AS SELECT * FROM '{path}'")
+        # Get actual columns from file
+        cols = self.conn.execute(f"DESCRIBE SELECT * FROM '{path}'").fetchall()
+        col_names = [c[0] for c in cols]
+
+        # Build SELECT with renames
+        select_parts = []
+        for col in col_names:
+            canonical = self.COLUMN_MAP.get(col, col)
+            if canonical != col:
+                select_parts.append(f'"{col}" AS {canonical}')
+            else:
+                select_parts.append(f'"{col}"')
+
+        select_clause = ', '.join(select_parts)
+        self.conn.execute(f"CREATE OR REPLACE TABLE observations AS SELECT {select_clause} FROM '{path}'")
 
     def get_row_count(self) -> int:
         """Return number of rows loaded."""

@@ -18,9 +18,9 @@ SELECT
     y,
     index_dimension,
     signal_class,
-    (LEAD(y) OVER w - LAG(y) OVER w) / 2.0 AS dy
-FROM v_base
-WINDOW w AS (PARTITION BY signal_id ORDER BY I);
+    (LEAD(y) OVER (PARTITION BY signal_id ORDER BY I) -
+     LAG(y) OVER (PARTITION BY signal_id ORDER BY I)) / 2.0 AS dy
+FROM v_base;
 
 
 -- ============================================================================
@@ -36,9 +36,9 @@ SELECT
     index_dimension,
     signal_class,
     dy,
-    LEAD(y) OVER w - 2*y + LAG(y) OVER w AS d2y
-FROM v_dy
-WINDOW w AS (PARTITION BY signal_id ORDER BY I);
+    LEAD(y) OVER (PARTITION BY signal_id ORDER BY I) - 2*y +
+    LAG(y) OVER (PARTITION BY signal_id ORDER BY I) AS d2y
+FROM v_dy;
 
 
 -- ============================================================================
@@ -55,9 +55,9 @@ SELECT
     signal_class,
     dy,
     d2y,
-    (LEAD(d2y) OVER w - LAG(d2y) OVER w) / 2.0 AS d3y
-FROM v_d2y
-WINDOW w AS (PARTITION BY signal_id ORDER BY I);
+    (LEAD(d2y) OVER (PARTITION BY signal_id ORDER BY I) -
+     LAG(d2y) OVER (PARTITION BY signal_id ORDER BY I)) / 2.0 AS d3y
+FROM v_d2y;
 
 
 -- ============================================================================
@@ -65,7 +65,6 @@ WINDOW w AS (PARTITION BY signal_id ORDER BY I);
 -- ============================================================================
 -- κ = |d²y| / (1 + dy²)^(3/2)
 -- Measures how fast direction changes along the curve
--- Only meaningful for analog/periodic signals
 
 CREATE OR REPLACE VIEW v_curvature AS
 SELECT
@@ -76,11 +75,7 @@ SELECT
     signal_class,
     dy,
     d2y,
-    CASE 
-        WHEN signal_class IN ('analog', 'periodic') 
-        THEN ABS(d2y) / POWER(1 + dy*dy + 1e-10, 1.5)
-        ELSE NULL  -- Curvature meaningless for digital/event
-    END AS kappa
+    ABS(d2y) / POWER(1 + dy*dy + 1e-10, 1.5) AS kappa
 FROM v_d2y
 WHERE dy IS NOT NULL AND d2y IS NOT NULL;
 
@@ -88,10 +83,7 @@ WHERE dy IS NOT NULL AND d2y IS NOT NULL;
 -- ============================================================================
 -- 005: LAPLACIAN (∇²y) - For Spatial Fields
 -- ============================================================================
--- Same as second derivative but semantic difference:
--- - d2y: temporal acceleration
--- - laplacian: spatial diffusion operator
--- Only meaningful when index_dimension = 'space'
+-- Same as second derivative but semantic difference
 
 CREATE OR REPLACE VIEW v_laplacian AS
 SELECT
@@ -100,20 +92,15 @@ SELECT
     y,
     index_dimension,
     signal_class,
-    CASE
-        WHEN index_dimension = 'space'
-        THEN LEAD(y) OVER w - 2*y + LAG(y) OVER w
-        ELSE NULL
-    END AS laplacian
-FROM v_base
-WINDOW w AS (PARTITION BY signal_id ORDER BY I);
+    LEAD(y) OVER (PARTITION BY signal_id ORDER BY I) - 2*y +
+    LAG(y) OVER (PARTITION BY signal_id ORDER BY I) AS laplacian
+FROM v_base;
 
 
 -- ============================================================================
 -- 006: GRADIENT MAGNITUDE (|∇y|)
 -- ============================================================================
 -- For 1D: just |dy|
--- Useful for detecting steep changes
 
 CREATE OR REPLACE VIEW v_gradient AS
 SELECT
@@ -131,7 +118,6 @@ FROM v_dy;
 -- 007: ARC LENGTH (cumulative)
 -- ============================================================================
 -- s = ∫√(1 + dy²) dI
--- Approximated as running sum of segment lengths
 
 CREATE OR REPLACE VIEW v_arc_length AS
 SELECT
@@ -141,8 +127,8 @@ SELECT
     dy,
     SQRT(1 + dy*dy) AS segment_length,
     SUM(SQRT(1 + COALESCE(dy*dy, 0))) OVER (
-        PARTITION BY signal_id 
-        ORDER BY I 
+        PARTITION BY signal_id
+        ORDER BY I
         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
     ) AS arc_length_cumulative
 FROM v_dy;
@@ -151,8 +137,6 @@ FROM v_dy;
 -- ============================================================================
 -- 008: VELOCITY MAGNITUDE (for phase space)
 -- ============================================================================
--- When y is position, dy is velocity
--- This computes |velocity| = |dy/dI|
 
 CREATE OR REPLACE VIEW v_velocity AS
 SELECT
@@ -169,9 +153,6 @@ FROM v_d2y;
 -- ============================================================================
 -- 009: DIVERGENCE PROXY (for multi-signal systems)
 -- ============================================================================
--- In 1D per signal, we can compute local expansion rate
--- div ≈ d(dy)/dI = d2y
--- Positive = expanding, Negative = contracting
 
 CREATE OR REPLACE VIEW v_divergence AS
 SELECT
@@ -189,8 +170,6 @@ FROM v_d2y;
 -- ============================================================================
 -- 010: SMOOTHNESS INDEX
 -- ============================================================================
--- Ratio of second derivative magnitude to first derivative magnitude
--- High = rough/noisy, Low = smooth
 
 CREATE OR REPLACE VIEW v_smoothness AS
 SELECT
@@ -198,13 +177,13 @@ SELECT
     I,
     dy,
     d2y,
-    CASE 
-        WHEN ABS(dy) > 1e-10 
+    CASE
+        WHEN ABS(dy) > 1e-10
         THEN ABS(d2y) / ABS(dy)
         ELSE NULL
     END AS roughness_index,
     CASE
-        WHEN ABS(dy) > 1e-10 
+        WHEN ABS(dy) > 1e-10
         THEN ABS(dy) / (ABS(d2y) + 1e-10)
         ELSE NULL
     END AS smoothness_index
@@ -214,7 +193,6 @@ FROM v_d2y;
 -- ============================================================================
 -- CALCULUS SUMMARY VIEW
 -- ============================================================================
--- Combines all calculus metrics into one view
 
 CREATE OR REPLACE VIEW v_calculus_complete AS
 SELECT
