@@ -78,7 +78,7 @@ print(hurst['hurst_exponent'])
 
 ```python
 import polars as pl
-from prism.db.parquet_store import get_path, OBSERVATIONS, SIGNALS, GEOMETRY, STATE, COHORTS
+from prism.db.parquet_store import get_path, OBSERVATIONS, VECTOR, GEOMETRY, DYNAMICS, COHORTS
 
 # Read observations
 observations = pl.read_parquet(get_path(OBSERVATIONS))
@@ -86,8 +86,8 @@ observations = pl.read_parquet(get_path(OBSERVATIONS))
 # Query data
 df = observations.filter(pl.col('signal_id') == 'sensor_T30')
 
-# Read signals
-signals = pl.read_parquet(get_path(SIGNALS))
+# Read vector metrics
+vector = pl.read_parquet(get_path(VECTOR))
 ```
 
 ### CLI Entry Points

@@ -22,9 +22,9 @@ from prism.db.parquet_store import (
     get_path,
     get_data_root,
     OBSERVATIONS,
-    SIGNALS,
+    VECTOR,
     GEOMETRY,
-    STATE,
+    DYNAMICS,
     COHORTS,
 )
 

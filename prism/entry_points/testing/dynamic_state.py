@@ -38,9 +38,9 @@ from prism.db.parquet_store import (
     get_data_root,
     ensure_directory,
     OBSERVATIONS,
-    SIGNALS,
+    VECTOR,
     GEOMETRY,
-    STATE,
+    DYNAMICS,
     COHORTS,
 )
 from prism.db.polars_io import write_parquet_atomic
@@ -274,11 +274,11 @@ def run_dynamic_state(
 
     # Default paths
     if signal_field_path is None:
-        signal_field_path = get_path(SIGNALS)
+        signal_field_path = get_path(VECTOR)
     if geometry_field_path is None:
         geometry_field_path = get_path(GEOMETRY)
     if output_path is None:
-        output_path = get_path(STATE)
+        output_path = get_path(DYNAMICS)
 
     if verbose:
         print("=" * 70)
@@ -467,7 +467,7 @@ Examples:
         print("\n" + "=" * 70)
         print("DYNAMIC STATE COMPLETE")
         print("=" * 70)
-        print(f"Output: {output_path or get_path(STATE)}")
+        print(f"Output: {output_path or get_path(DYNAMICS)}")
         print(f"Rows: {len(state_df):,}")
 
 

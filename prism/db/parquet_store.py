@@ -106,7 +106,7 @@ def get_path(file: str) -> Path:
     Return the path to a PRISM output file.
 
     Args:
-        file: File name (OBSERVATIONS, VECTOR, GEOMETRY, STATE, COHORTS)
+        file: File name (OBSERVATIONS, VECTOR, GEOMETRY, DYNAMICS, COHORTS)
 
     Returns:
         Path to parquet file

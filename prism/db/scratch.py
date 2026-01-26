@@ -211,7 +211,7 @@ def merge_temp_results(
         >>> temp_paths = [Path('/tmp/worker_0.parquet'), Path('/tmp/worker_1.parquet')]
         >>> merge_temp_results(
         ...     temp_paths,
-        ...     get_path(SIGNALS),
+        ...     get_path(VECTOR),
         ...     key_cols=['entity_id', 'signal_id', 'timestamp']
         ... )
     """
@@ -265,7 +265,7 @@ def merge_to_table(
 
     Args:
         temp_paths: List of temp parquet file paths
-        file: Target file (OBSERVATIONS, SIGNALS, GEOMETRY, STATE, COHORTS)
+        file: Target file (OBSERVATIONS, VECTOR, GEOMETRY, DYNAMICS, COHORTS)
         key_cols: Key columns for upsert
         delete_temps: Delete temp files after merge
 
@@ -275,7 +275,7 @@ def merge_to_table(
     Example:
         >>> merge_to_table(
         ...     temp_paths,
-        ...     SIGNALS,
+        ...     VECTOR,
         ...     key_cols=['entity_id', 'signal_id', 'timestamp']
         ... )
     """
@@ -297,7 +297,7 @@ class ParquetBatchWriter:
                 writer.append(pl.DataFrame(metrics))
 
             # Write all at once
-            writer.write_to(get_path(SIGNALS),
+            writer.write_to(get_path(VECTOR),
                            key_cols=['entity_id', 'signal_id', 'timestamp'])
     """
 
@@ -389,7 +389,7 @@ class ParquetBatchWriter:
         Write to PRISM file.
 
         Args:
-            file: Target file (OBSERVATIONS, SIGNALS, GEOMETRY, STATE, COHORTS)
+            file: Target file (OBSERVATIONS, VECTOR, GEOMETRY, DYNAMICS, COHORTS)
             key_cols: Key columns for upsert
             mode: 'replace', 'append', or 'upsert'
 

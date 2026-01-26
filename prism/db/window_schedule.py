@@ -47,9 +47,9 @@ from prism.db.parquet_store import (
     get_path,
     get_data_root,
     OBSERVATIONS,
-    SIGNALS,
+    VECTOR,
     GEOMETRY,
-    STATE,
+    DYNAMICS,
     COHORTS,
 )
 from prism.db.polars_io import read_parquet, upsert_parquet, write_parquet_atomic
@@ -451,7 +451,7 @@ def reconcile_with_results() -> Dict[str, int]:
     if not _get_schedule_path().exists():
         return {}
 
-    vector_path = get_path(SIGNALS)
+    vector_path = get_path(VECTOR)
     if not vector_path.exists():
         return {}
 
@@ -534,7 +534,7 @@ def get_missing_windows(tier: Optional[str] = None) -> pl.DataFrame:
         schedule = schedule.filter(pl.col("tier") == tier)
 
     # Load actual results
-    vector_path = get_path(SIGNALS)
+    vector_path = get_path(VECTOR)
     if not vector_path.exists():
         return schedule  # All are missing
 

@@ -19,9 +19,6 @@ from typing import List, Optional, Union
 import polars as pl
 
 from prism.db.parquet_store import get_path, OBSERVATIONS, VECTOR, GEOMETRY, DYNAMICS, PHYSICS, COHORTS
-# Legacy aliases
-SIGNALS = VECTOR
-STATE = DYNAMICS
 
 
 def read_parquet(
@@ -505,7 +502,7 @@ def read_file(file: str, columns: Optional[List[str]] = None) -> pl.DataFrame:
     Read a file from the PRISM data store.
 
     Args:
-        file: File constant (OBSERVATIONS, SIGNALS, GEOMETRY, STATE, COHORTS)
+        file: File constant (OBSERVATIONS, VECTOR, GEOMETRY, DYNAMICS, COHORTS)
         columns: Optional list of columns to read
 
     Returns:
@@ -530,7 +527,7 @@ def write_file(
 
     Args:
         df: Polars DataFrame to write
-        file: File constant (OBSERVATIONS, SIGNALS, GEOMETRY, STATE, COHORTS)
+        file: File constant (OBSERVATIONS, VECTOR, GEOMETRY, DYNAMICS, COHORTS)
         mode: 'replace' (overwrite), 'append', or 'upsert'
         key_cols: Required for 'upsert' mode
 
