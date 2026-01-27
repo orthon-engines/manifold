@@ -59,9 +59,19 @@ class StageOrchestrator:
         Execute this stage's SQL.
 
         PURE: Just loads and executes. No logic.
+
+        DuckDB handles multi-statement SQL files natively.
         """
         sql = self.load_sql()
-        self.conn.execute(sql)
+
+        try:
+            self.conn.execute(sql)
+        except Exception as e:
+            # Re-raise with context
+            raise RuntimeError(
+                f"SQL execution failed in {self.SQL_FILE}: {e}"
+            ) from e
+
         self._loaded = True
 
     def get_views(self) -> List[str]:
