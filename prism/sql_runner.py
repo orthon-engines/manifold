@@ -114,22 +114,33 @@ class SQLRunner:
         Load outputs from Python runner for SQL engines that need them.
 
         For example, regime_assignment might need primitives.parquet
-        """
-        primitives_path = self.output_dir / 'primitives.parquet'
-        if primitives_path.exists():
-            self.conn.execute(f"""
-                CREATE TABLE primitives AS
-                SELECT * FROM read_parquet('{primitives_path}')
-            """)
-            print(f"  Loaded primitives.parquet for SQL reference")
 
+        Note: These are optional reference tables. SQL engines should work
+        on observations alone, but may use enriched data if available.
+        """
+        # Try to load primitives (optional)
+        primitives_path = self.output_dir / 'primitives.parquet'
+        try:
+            if primitives_path.exists():
+                self.conn.execute(f"""
+                    CREATE TABLE primitives AS
+                    SELECT * FROM read_parquet('{primitives_path}')
+                """)
+                print(f"  Loaded primitives.parquet for SQL reference")
+        except Exception as e:
+            print(f"  Note: Could not load primitives.parquet: {e}")
+
+        # Try to load enriched observations (optional)
         obs_enriched_path = self.output_dir / 'observations_enriched.parquet'
-        if obs_enriched_path.exists():
-            self.conn.execute(f"""
-                CREATE TABLE observations_enriched AS
-                SELECT * FROM read_parquet('{obs_enriched_path}')
-            """)
-            print(f"  Loaded observations_enriched.parquet for SQL reference")
+        try:
+            if obs_enriched_path.exists():
+                self.conn.execute(f"""
+                    CREATE TABLE observations_enriched AS
+                    SELECT * FROM read_parquet('{obs_enriched_path}')
+                """)
+                print(f"  Loaded observations_enriched.parquet for SQL reference")
+        except Exception as e:
+            print(f"  Note: Could not load observations_enriched.parquet: {e}")
 
     def _run_engine(self, engine_name: str):
         """Run a single SQL engine."""
