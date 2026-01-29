@@ -124,7 +124,7 @@ class ManifestRunner:
             print("  Skipping: observations_enriched.parquet not found")
             return
 
-        from prism.engines.python.physics import compute_physics_for_all_entities
+        from prism.engines.signal.physics import compute_physics_for_all_entities
 
         obs_enriched = pd.read_parquet(obs_enriched_path)
         physics_params = self.params.get('physics', {})
@@ -155,24 +155,11 @@ class ManifestRunner:
             print("  Skipping: observations_enriched.parquet not found")
             return
 
-        from prism.dynamics.engine import compute_dynamics_for_all_entities
-
-        obs_enriched = pd.read_parquet(obs_enriched_path)
-        dynamics_params = self.params.get('dynamics', {})
-
-        dynamics_df = compute_dynamics_for_all_entities(
-            obs_enriched=obs_enriched,
-            window_size=dynamics_params.get('window_size', 100),
-            step_size=dynamics_params.get('step_size', 10),
-        )
-
-        if not dynamics_df.empty:
-            output_path = self.output_dir / 'dynamics.parquet'
-            dynamics_df.to_parquet(output_path, index=False)
-            print(f"  dynamics.parquet: {len(dynamics_df):,} rows x {len(dynamics_df.columns)} cols")
-            self.results['dynamics'] = {'rows': len(dynamics_df), 'cols': len(dynamics_df.columns)}
-        else:
-            print("  Warning: no dynamics data computed")
+        # TODO: Migrate dynamics engine to new structure
+        # The dynamics primitives are now in prism.primitives.dynamical
+        # Need to create prism.engines.signal.dynamics to orchestrate them
+        print("  Skipping: dynamics engine pending migration to prism.engines.signal.dynamics")
+        return
 
     def _run_topology(self):
         """Compute topology (persistent homology, Betti numbers) for all entities."""
@@ -186,24 +173,11 @@ class ManifestRunner:
             print("  Skipping: observations_enriched.parquet not found")
             return
 
-        from prism.topology.engine import compute_topology_for_all_entities
-
-        obs_enriched = pd.read_parquet(obs_enriched_path)
-        topology_params = self.params.get('topology', {})
-
-        topology_df = compute_topology_for_all_entities(
-            obs_enriched=obs_enriched,
-            window_size=topology_params.get('window_size', 100),
-            step_size=topology_params.get('step_size', 20),
-        )
-
-        if not topology_df.empty:
-            output_path = self.output_dir / 'topology.parquet'
-            topology_df.to_parquet(output_path, index=False)
-            print(f"  topology.parquet: {len(topology_df):,} rows x {len(topology_df.columns)} cols")
-            self.results['topology'] = {'rows': len(topology_df), 'cols': len(topology_df.columns)}
-        else:
-            print("  Warning: no topology data computed")
+        # TODO: Migrate topology engine to new structure
+        # The topology primitives are now in prism.primitives.topology
+        # Need to create prism.engines.signal.topology to orchestrate them
+        print("  Skipping: topology engine pending migration to prism.engines.signal.topology")
+        return
 
     def _run_information_flow(self):
         """Compute information flow (transfer entropy, causality) for all entities."""
@@ -217,24 +191,11 @@ class ManifestRunner:
             print("  Skipping: observations_enriched.parquet not found")
             return
 
-        from prism.information.engine import compute_information_flow_for_all_entities
-
-        obs_enriched = pd.read_parquet(obs_enriched_path)
-        info_params = self.params.get('information_flow', {})
-
-        info_df = compute_information_flow_for_all_entities(
-            obs_enriched=obs_enriched,
-            window_size=info_params.get('window_size', 100),
-            step_size=info_params.get('step_size', 20),
-        )
-
-        if not info_df.empty:
-            output_path = self.output_dir / 'information_flow.parquet'
-            info_df.to_parquet(output_path, index=False)
-            print(f"  information_flow.parquet: {len(info_df):,} rows x {len(info_df.columns)} cols")
-            self.results['information_flow'] = {'rows': len(info_df), 'cols': len(info_df.columns)}
-        else:
-            print("  Warning: no information flow data computed")
+        # TODO: Migrate information flow engine to new structure
+        # The information primitives are now in prism.primitives.information
+        # Need to create prism.engines.signal.information to orchestrate them
+        print("  Skipping: information flow engine pending migration to prism.engines.signal.information")
+        return
 
     def _print_summary(self):
         """Print summary of outputs."""

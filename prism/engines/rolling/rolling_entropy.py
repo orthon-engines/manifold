@@ -5,7 +5,7 @@ Computes entropy over rolling windows.
 """
 
 import numpy as np
-from ..python import entropy
+from ..signal import entropy
 
 
 def compute(y: np.ndarray, window: int = 100, stride: int = 1) -> dict:

@@ -42,9 +42,9 @@ WINDOWED_ENGINES = [
 def load_engine(engine_name: str, engine_type: str):
     """Dynamically load an engine module."""
     if engine_type == 'windowed':
-        module_path = f'prism.engines.python_windowed.{engine_name}'
+        module_path = f'prism.engines.rolling.{engine_name}'
     else:
-        module_path = f'prism.engines.python.{engine_name}'
+        module_path = f'prism.engines.signal.{engine_name}'
 
     try:
         module = importlib.import_module(module_path)
@@ -291,7 +291,7 @@ class PythonRunner:
         # Special case for manifold (cross-signal)
         if 'manifold' in engines_to_run:
             try:
-                from prism.engines.python_windowed import manifold
+                from prism.engines.rolling import manifold
                 self.manifold_df = manifold.compute(self.obs)
                 print(f"  Manifold: {len(self.manifold_df):,} points")
             except Exception as e:
@@ -322,7 +322,7 @@ class PythonRunner:
                         result = func(y, I)
                     # Stability needs derivatives first
                     elif name == 'stability':
-                        from prism.engines.python_windowed import derivatives
+                        from prism.engines.rolling import derivatives
                         deriv = derivatives.compute(y, I)
                         result = func(y, deriv['dy'], deriv['d2y'])
                     elif params:

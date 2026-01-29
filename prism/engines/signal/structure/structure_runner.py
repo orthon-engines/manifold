@@ -210,7 +210,7 @@ if __name__ == '__main__':
     import sys
 
     if len(sys.argv) < 3:
-        print("Usage: python -m prism.engines.python.structure.structure_runner <observations.parquet> <output.parquet>")
+        print("Usage: python -m prism.engines.signal.structure.structure_runner <observations.parquet> <output.parquet>")
         sys.exit(1)
 
     observations_path = sys.argv[1]

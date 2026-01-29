@@ -5,7 +5,7 @@ Computes Hurst exponent over rolling windows.
 """
 
 import numpy as np
-from ..python import hurst
+from ..signal import hurst
 
 
 def compute(y: np.ndarray, window: int = 100, stride: int = 1) -> dict:

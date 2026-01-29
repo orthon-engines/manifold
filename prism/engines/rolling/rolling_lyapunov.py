@@ -9,7 +9,7 @@ Key insight: Lyapunov trending positive = system losing stability
 
 import numpy as np
 from typing import Dict
-from ..python import lyapunov
+from ..signal import lyapunov
 
 
 def compute(

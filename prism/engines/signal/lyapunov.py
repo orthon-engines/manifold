@@ -35,11 +35,11 @@ def compute(y: np.ndarray, min_samples: int = 200) -> Dict[str, Any]:
         return _empty_result()
 
     try:
-        # Import primitives
-        from .primitives.embedding import (
+        # Import primitives from package root
+        from prism.primitives.embedding import (
             time_delay_embedding, optimal_delay, optimal_dimension
         )
-        from .primitives.dynamical.lyapunov import lyapunov_rosenstein
+        from prism.primitives.dynamical.lyapunov import lyapunov_rosenstein
 
         # Auto-detect embedding parameters
         tau = optimal_delay(y, max_lag=min(100, n // 10))
