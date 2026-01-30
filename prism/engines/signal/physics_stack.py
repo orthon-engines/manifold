@@ -235,7 +235,7 @@ def compute_coherence(
         pivoted = entity_data.pivot_table(
             index='I',
             columns='signal_id',
-            values='y',
+            values='value',
             aggfunc='mean'
         ).sort_index()
     except Exception:

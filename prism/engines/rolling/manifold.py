@@ -16,7 +16,7 @@ def compute(observations: pd.DataFrame, params: Dict[str, Any] = None) -> pd.Dat
     Compute manifold projection at each time slice.
 
     Args:
-        observations: DataFrame with entity_id, signal_id, I, y columns
+        observations: DataFrame with entity_id, signal_id, I, value columns
         params: Parameters from manifest:
             - n_components: Number of PCA components (default: 3)
 
@@ -29,7 +29,7 @@ def compute(observations: pd.DataFrame, params: Dict[str, Any] = None) -> pd.Dat
     results = []
 
     for entity_id, group in observations.groupby('entity_id'):
-        pivot = group.pivot(index='I', columns='signal_id', values='y').dropna()
+        pivot = group.pivot(index='I', columns='signal_id', values='value').dropna()
         if len(pivot) < 10 or len(pivot.columns) < 2:
             continue
 

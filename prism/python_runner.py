@@ -2,6 +2,7 @@
 PRISM Python Runner
 
 Executes engines from python/ and python_windowed/ folders.
+PARALLEL PROCESSING enabled for windowed engines.
 """
 
 import numpy as np
@@ -10,8 +11,14 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Any
 import importlib
 import warnings
+import multiprocessing as mp
+from functools import partial
+import os
+
 warnings.filterwarnings('ignore')
 
+# Use all available cores, leave 1 for system
+N_WORKERS = max(1, mp.cpu_count() - 1)
 
 # Engine registries
 # Note: lyapunov removed - it's a dynamical systems metric computed in dynamics_runner
@@ -51,8 +58,52 @@ def load_engine(engine_name: str, engine_type: str):
         module = importlib.import_module(module_path)
         return module.compute
     except (ImportError, AttributeError) as e:
-        print(f"  Warning: Could not load engine {engine_name}: {e}")
         return None
+
+
+def _process_single_signal(args):
+    """
+    Process a single signal with all windowed engines.
+    Standalone function for multiprocessing compatibility.
+    """
+    entity, signal, value, I, df_dict, engines_to_run, params = args
+
+    # Reconstruct DataFrame from dict
+    df = pd.DataFrame(df_dict)
+
+    if len(value) < 10:
+        return None
+
+    # Load engines in worker process
+    engine_funcs = {}
+    for name in engines_to_run:
+        func = load_engine(name, 'windowed')
+        if func:
+            engine_funcs[name] = func
+
+    for name, func in engine_funcs.items():
+        try:
+            engine_params = params.get(name, {})
+
+            # Derivatives needs I
+            if name == 'derivatives':
+                result = func(value, I, engine_params)
+            # Stability needs derivatives first
+            elif name == 'stability':
+                from prism.engines.rolling import derivatives
+                deriv_params = params.get('derivatives', {})
+                deriv = derivatives.compute(value, I, deriv_params)
+                result = func(value, deriv['dy'], deriv['d2y'], engine_params)
+            else:
+                # All other windowed engines: func(y, params)
+                result = func(value, engine_params)
+
+            for col, vals in result.items():
+                df[col] = vals
+        except Exception:
+            pass
+
+    return df
 
 
 class PythonRunner:
@@ -63,7 +114,7 @@ class PythonRunner:
     - Signal-level engines (one value per signal)
     - Pair engines (directional A→B)
     - Symmetric pair engines (A↔B)
-    - Windowed engines (observation-level)
+    - Windowed engines (observation-level) — PARALLEL
     """
 
     def __init__(
@@ -272,12 +323,12 @@ class PythonRunner:
         print(f"  Processed {len(self.geometry_pairs)} symmetric pairs")
 
     def run_windowed_engines(self):
-        """Run ALL windowed engines. No exceptions."""
+        """Run ALL windowed engines in PARALLEL. No exceptions."""
         engines_to_run = list(WINDOWED_ENGINES)  # ALL engines, always
 
-        print(f"\n[WINDOWED ENGINES] Running ALL: {engines_to_run}")
+        print(f"\n[WINDOWED ENGINES] Running ALL (parallel, {N_WORKERS} workers): {engines_to_run}")
 
-        # Special case for manifold (cross-signal)
+        # Special case for manifold (cross-signal, not parallelizable per-signal)
         if 'manifold' in engines_to_run:
             try:
                 from prism.engines.rolling import manifold
@@ -288,49 +339,33 @@ class PythonRunner:
                 print(f"  Manifold failed: {e}")
             engines_to_run = [e for e in engines_to_run if e != 'manifold']
 
-        # Load remaining engine functions
-        engine_funcs = {}
-        for name in engines_to_run:
-            func = load_engine(name, 'windowed')
-            if func:
-                engine_funcs[name] = func
+        # Prepare args for parallel processing
+        work_items = []
+        for (entity, signal), data in self.signal_data.items():
+            # Convert DataFrame to dict for pickling
+            df_dict = data['df'].to_dict('list')
+            work_items.append((
+                entity,
+                signal,
+                data['value'],
+                data['I'],
+                df_dict,
+                engines_to_run,
+                self.params
+            ))
 
-        total_signals = len(self.signal_data)
-        for idx, ((entity, signal), data) in enumerate(self.signal_data.items()):
-            y = data['value']
-            I = data['I']
-            df = data['df'].copy()
+        total = len(work_items)
+        print(f"  Processing {total} signals across {N_WORKERS} workers...")
 
-            if len(y) < 10:
-                continue
-
-            # Progress update every 10%
-            if idx % max(1, total_signals // 10) == 0:
-                print(f"    Progress: {idx}/{total_signals} signals ({100*idx/total_signals:.0f}%)", flush=True)
-
-            for name, func in engine_funcs.items():
-                try:
-                    engine_params = self.params.get(name, {})
-
-                    # Derivatives needs I
-                    if name == 'derivatives':
-                        result = func(y, I, engine_params)
-                    # Stability needs derivatives first
-                    elif name == 'stability':
-                        from prism.engines.rolling import derivatives
-                        deriv_params = self.params.get('derivatives', {})
-                        deriv = derivatives.compute(y, I, deriv_params)
-                        result = func(y, deriv['dy'], deriv['d2y'], engine_params)
-                    else:
-                        # All other windowed engines: func(y, params)
-                        result = func(y, engine_params)
-
-                    for col, vals in result.items():
-                        df[col] = vals
-                except Exception:
-                    pass
-
-            self.observations_enriched.append(df)
+        # Process in parallel
+        completed = 0
+        with mp.Pool(N_WORKERS) as pool:
+            for result in pool.imap_unordered(_process_single_signal, work_items):
+                if result is not None:
+                    self.observations_enriched.append(result)
+                completed += 1
+                if completed % max(1, total // 10) == 0:
+                    print(f"    Progress: {completed}/{total} ({100*completed/total:.0f}%)", flush=True)
 
         print(f"  Processed {len(self.observations_enriched)} signals")
 
