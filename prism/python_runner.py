@@ -14,10 +14,11 @@ warnings.filterwarnings('ignore')
 
 
 # Engine registries
+# Note: lyapunov removed - it's a dynamical systems metric computed in dynamics_runner
 SIGNAL_ENGINES = [
     'rms', 'peak', 'crest_factor', 'kurtosis', 'skewness',
     'envelope', 'harmonics', 'frequency_bands', 'spectral',
-    'hurst', 'entropy', 'lyapunov', 'garch', 'attractor', 'dmd',
+    'hurst', 'entropy', 'garch', 'attractor', 'dmd',
     'pulsation_index', 'rate_of_change', 'time_constant',
     'cycle_counting', 'basin', 'lof'
 ]
