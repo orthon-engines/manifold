@@ -40,6 +40,7 @@ except ImportError:
 from prism.python_runner import PythonRunner, SIGNAL_ENGINES, PAIR_ENGINES, SYMMETRIC_PAIR_ENGINES, WINDOWED_ENGINES
 from prism.sql_runner import SQLRunner, SQL_ENGINES
 from prism.ram_manager import RAMManager, MemoryStats, streaming_parquet_writer, combine_parquet_batches
+from prism.data_check import abort_if_invalid
 
 # Canonical data directory
 DATA_DIR = Path(__file__).parent.parent / 'data'
@@ -84,6 +85,9 @@ def run(manifest_path: Path = None) -> dict:
             f"observations.parquet not found in {data_dir}\n"
             "ORTHON must create observations.parquet before running PRISM."
         )
+
+    # Validate observations against canonical schema (aborts if invalid)
+    abort_if_invalid(observations_path)
 
     # Output goes to data/ (same directory, overwrites existing)
     output_dir = data_dir
