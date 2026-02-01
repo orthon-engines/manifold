@@ -2,8 +2,7 @@
 PRISM Geometry Dynamics Engine
 
 The complete differential geometry framework.
-Computes derivatives, curvature, and trajectory classification
-for the geometry evolution over time.
+Computes derivatives and curvature for the geometry evolution over time.
 
 "You have position (state_vector).
  You have shape (eigenvalues).
@@ -13,9 +12,11 @@ Computes:
 - First derivatives (velocity/tangent)
 - Second derivatives (acceleration/curvature)
 - Third derivatives (jerk/torsion)
-- Trajectory classification
-- Collapse detection
+- Collapse detection (computed index, not interpretation)
 - Phase space analysis
+
+NOTE: PRISM computes, never classifies. All classification logic
+has been removed. ORTHON interprets the computed values.
 
 INPUT:
 - state_geometry.parquet (eigenvalues over time)
@@ -32,29 +33,6 @@ import numpy as np
 import polars as pl
 from pathlib import Path
 from typing import List, Dict, Optional, Any, Tuple
-from enum import Enum
-
-
-# ============================================================
-# TRAJECTORY CLASSIFICATION
-# ============================================================
-
-class TrajectoryType(Enum):
-    STABLE = "stable"
-    CONVERGING = "converging"
-    DIVERGING = "diverging"
-    OSCILLATING = "oscillating"
-    CHAOTIC = "chaotic"
-    TRANSIENT = "transient"
-    COLLAPSING = "collapsing"
-    EXPANDING = "expanding"
-
-
-class StabilityClass(Enum):
-    STABLE = "stable"
-    MARGINALLY_STABLE = "marginally_stable"
-    UNSTABLE = "unstable"
-    CHAOTIC = "chaotic"
 
 
 # ============================================================
@@ -163,125 +141,6 @@ def compute_phase_space(
         phase_space[:, i] = x[start:end]
 
     return phase_space
-
-
-# ============================================================
-# TRAJECTORY CLASSIFICATION
-# ============================================================
-
-def classify_trajectory(
-    velocity: np.ndarray,
-    acceleration: np.ndarray,
-    value: np.ndarray = None,
-    thresholds: Dict[str, float] = None
-) -> TrajectoryType:
-    """
-    Classify trajectory behavior based on derivatives.
-
-    STABLE: Low velocity and acceleration
-    CONVERGING: Moving toward equilibrium, decelerating
-    DIVERGING: Moving away from equilibrium, accelerating
-    OSCILLATING: Velocity changes sign periodically
-    CHAOTIC: High variability in both velocity and acceleration
-    COLLAPSING: Sustained negative velocity (for effective_dim)
-    EXPANDING: Sustained positive velocity
-    """
-    thresholds = thresholds or {
-        'stable_velocity': 0.01,
-        'stable_acceleration': 0.01,
-        'oscillation_fraction': 0.3,
-        'chaos_cv': 2.0,
-        'sustained_fraction': 0.5,
-    }
-
-    # Remove NaN
-    valid = ~np.isnan(velocity) & ~np.isnan(acceleration)
-    if valid.sum() < 3:
-        return TrajectoryType.STABLE
-
-    vel = velocity[valid]
-    acc = acceleration[valid]
-
-    mean_vel = np.mean(vel)
-    std_vel = np.std(vel)
-    mean_acc = np.mean(acc)
-    std_acc = np.std(acc)
-
-    # Count sign changes in velocity
-    sign_changes = np.sum(np.diff(np.sign(vel)) != 0)
-    oscillation_ratio = sign_changes / len(vel)
-
-    # Coefficient of variation
-    cv_vel = std_vel / (np.abs(mean_vel) + 1e-10)
-    cv_acc = std_acc / (np.abs(mean_acc) + 1e-10)
-
-    # Classification logic
-    if std_vel < thresholds['stable_velocity'] and np.abs(mean_vel) < thresholds['stable_velocity']:
-        return TrajectoryType.STABLE
-
-    if oscillation_ratio > thresholds['oscillation_fraction']:
-        return TrajectoryType.OSCILLATING
-
-    if cv_vel > thresholds['chaos_cv'] and cv_acc > thresholds['chaos_cv']:
-        return TrajectoryType.CHAOTIC
-
-    # Sustained direction check
-    neg_fraction = np.sum(vel < 0) / len(vel)
-    pos_fraction = np.sum(vel > 0) / len(vel)
-
-    if neg_fraction > thresholds['sustained_fraction']:
-        if mean_acc < 0:  # Accelerating in negative direction
-            return TrajectoryType.COLLAPSING
-        else:
-            return TrajectoryType.CONVERGING
-
-    if pos_fraction > thresholds['sustained_fraction']:
-        if mean_acc > 0:  # Accelerating in positive direction
-            return TrajectoryType.EXPANDING
-        else:
-            return TrajectoryType.DIVERGING
-
-    return TrajectoryType.TRANSIENT
-
-
-def classify_stability(
-    lyapunov_exponent: float = None,
-    eigenvalue_ratio: float = None,
-    velocity_variance: float = None
-) -> StabilityClass:
-    """
-    Classify stability based on available metrics.
-
-    Uses Lyapunov exponent if available, otherwise
-    falls back to eigenvalue ratio or velocity variance.
-    """
-    if lyapunov_exponent is not None:
-        if lyapunov_exponent < -0.01:
-            return StabilityClass.STABLE
-        elif lyapunov_exponent < 0.01:
-            return StabilityClass.MARGINALLY_STABLE
-        elif lyapunov_exponent < 0.1:
-            return StabilityClass.UNSTABLE
-        else:
-            return StabilityClass.CHAOTIC
-
-    if eigenvalue_ratio is not None:
-        if eigenvalue_ratio < 0.3:
-            return StabilityClass.STABLE
-        elif eigenvalue_ratio < 0.6:
-            return StabilityClass.MARGINALLY_STABLE
-        else:
-            return StabilityClass.UNSTABLE
-
-    if velocity_variance is not None:
-        if velocity_variance < 0.01:
-            return StabilityClass.STABLE
-        elif velocity_variance < 0.1:
-            return StabilityClass.MARGINALLY_STABLE
-        else:
-            return StabilityClass.UNSTABLE
-
-    return StabilityClass.MARGINALLY_STABLE
 
 
 # ============================================================
@@ -453,25 +312,10 @@ def compute_geometry_dynamics(
         eigen_1_deriv = compute_derivatives(eigenvalue_1, dt, smooth_window)
         variance_deriv = compute_derivatives(total_variance, dt, smooth_window)
 
-        # Classify trajectory
-        trajectory = classify_trajectory(
-            eff_dim_deriv['velocity'],
-            eff_dim_deriv['acceleration'],
-            effective_dim
-        )
-
-        # Detect collapse
+        # Detect collapse (computed values only, no classification)
         collapse = detect_collapse(effective_dim)
 
-        # Classify stability
-        velocity_var = np.var(eff_dim_deriv['velocity'])
-        eigen_ratio = group['ratio_2_1'].mean() if 'ratio_2_1' in group.columns else None
-        stability = classify_stability(
-            eigenvalue_ratio=eigen_ratio,
-            velocity_variance=velocity_var
-        )
-
-        # Build result rows
+        # Build result rows - computed values only, NO classification
         for i in range(n):
             row = {
                 'unit_id': unit_id,
@@ -488,24 +332,14 @@ def compute_geometry_dynamics(
                 # Eigenvalue dynamics
                 'eigenvalue_1': eigenvalue_1[i],
                 'eigenvalue_1_velocity': eigen_1_deriv['velocity'][i],
-                'eigenvalue_1_acceleration': eigen_1_deriv['acceleration'][i],
 
                 # Variance dynamics
                 'total_variance': total_variance[i],
                 'variance_velocity': variance_deriv['velocity'][i],
 
-                # Speed (magnitude of change)
-                'speed': eff_dim_deriv['speed'][i],
-
-                # Classification (constant for unit)
-                'trajectory_type': trajectory.value,
-                'stability_class': stability.value,
-
-                # Collapse detection (constant for unit)
-                'collapse_detected': collapse['collapse_detected'],
+                # Collapse detection (computed index/fraction, not interpretation)
                 'collapse_onset_idx': collapse['collapse_onset_idx'],
                 'collapse_onset_fraction': collapse['collapse_onset_fraction'],
-                'collapse_velocity': collapse['collapse_velocity'],
             }
             results.append(row)
 
@@ -517,16 +351,11 @@ def compute_geometry_dynamics(
         print(f"\nSaved: {output_path}")
         print(f"Shape: {result.shape}")
 
-        # Summary
-        print("\nTrajectory types:")
-        for ttype in result['trajectory_type'].unique().to_list():
-            count = (result['trajectory_type'] == ttype).sum()
-            print(f"  {ttype}: {count}")
-
-        print("\nCollapse detected:")
-        n_collapse = result.filter(pl.col('collapse_detected'))['unit_id'].n_unique()
-        n_total = result['unit_id'].n_unique()
-        print(f"  {n_collapse} / {n_total} units")
+        # Summary - computed values only
+        if 'collapse_onset_idx' in result.columns:
+            n_collapse = result.filter(pl.col('collapse_onset_idx').is_not_null())['engine'].n_unique()
+            n_total = result['engine'].n_unique()
+            print(f"\nCollapse onset detected: {n_collapse} / {n_total} engines")
 
     return result
 
@@ -624,14 +453,7 @@ def compute_signal_dynamics(
             dist_deriv = compute_derivatives(distance, dt, smooth_window)
             coh_deriv = compute_derivatives(coherence, dt, smooth_window)
 
-            # Classify trajectory
-            trajectory = classify_trajectory(
-                dist_deriv['velocity'],
-                dist_deriv['acceleration'],
-                distance
-            )
-
-            # Build result rows
+            # Build result rows - computed values only, NO classification
             for i in range(n):
                 row = {
                     'unit_id': unit_id,
@@ -649,13 +471,6 @@ def compute_signal_dynamics(
                     'coherence': coherence[i],
                     'coherence_velocity': coh_deriv['velocity'][i],
                     'coherence_acceleration': coh_deriv['acceleration'][i],
-
-                    # Classification
-                    'trajectory_type': trajectory.value,
-
-                    # Derived flags
-                    'is_converging': dist_deriv['velocity'][i] < 0,
-                    'is_aligning': coh_deriv['velocity'][i] > 0,
                 }
                 results.append(row)
 
@@ -671,11 +486,12 @@ def compute_signal_dynamics(
         print(f"\nSaved: {output_path}")
         print(f"Shape: {result.shape}")
 
-        # Summary
-        print("\nSignal trajectory types:")
-        for ttype in result['trajectory_type'].unique().to_list():
-            count = (result['trajectory_type'] == ttype).sum()
-            print(f"  {ttype}: {count}")
+        # Summary - computed values only
+        if len(result) > 0:
+            mean_dist_vel = result['distance_velocity'].mean()
+            mean_coh_vel = result['coherence_velocity'].mean()
+            print(f"\nMean distance velocity: {mean_dist_vel:.4f}")
+            print(f"Mean coherence velocity: {mean_coh_vel:.4f}")
 
     return result
 
@@ -836,13 +652,12 @@ Usage:
     python geometry_dynamics.py pairwise <signal_pairwise.parquet> [output.parquet]
     python geometry_dynamics.py all <state_geometry.parquet> <signal_geometry.parquet> [signal_pairwise.parquet] [output_dir]
 
-Computes:
+Computes (no classification - PRISM computes, ORTHON interprets):
 - Velocity (first derivative)
 - Acceleration (second derivative)
 - Jerk (third derivative)
 - Curvature
-- Trajectory classification
-- Collapse detection
+- Collapse onset index/fraction
 """
 
     if len(sys.argv) < 3:

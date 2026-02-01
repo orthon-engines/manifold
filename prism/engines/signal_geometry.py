@@ -35,6 +35,43 @@ DEFAULT_FEATURE_GROUPS = {
     'spectral': ['spectral_entropy', 'spectral_centroid', 'band_ratio_low', 'band_ratio_mid', 'band_ratio_high'],
 }
 
+# ============================================================
+# SVD NORMALIZATION
+# ============================================================
+# Features to exclude from SVD (unbounded when mean→0)
+
+SVD_EXCLUDE_FEATURES = {'cv', 'range_ratio', 'window_size'}
+
+
+def normalize_for_svd(matrix: np.ndarray, feature_names: List[str]) -> np.ndarray:
+    """
+    Z-score normalize features before SVD.
+
+    Excludes unbounded features (cv, range_ratio) that explode
+    when signals oscillate around zero.
+
+    Args:
+        matrix: Feature matrix (N × D)
+        feature_names: List of feature names
+
+    Returns:
+        Normalized matrix for SVD
+    """
+    # Exclude problematic features
+    keep_idx = [i for i, f in enumerate(feature_names) if f not in SVD_EXCLUDE_FEATURES]
+    if not keep_idx:
+        keep_idx = list(range(len(feature_names)))
+
+    matrix = matrix[:, keep_idx]
+
+    # Z-score: (x - mean) / std
+    mean = np.nanmean(matrix, axis=0, keepdims=True)
+    std = np.nanstd(matrix, axis=0, keepdims=True)
+    std = np.where(std < 1e-10, 1.0, std)
+
+    normalized = (matrix - mean) / std
+    return np.nan_to_num(normalized, nan=0.0, posinf=0.0, neginf=0.0)
+
 
 # ============================================================
 # SIGNAL GEOMETRY COMPUTATION (Python - needs PC projections)
@@ -227,8 +264,14 @@ def compute_signal_geometry(
                 continue
 
             # Get centroid from state_vector
+            # Try state_{engine}_{feature} first (legacy), then centroid_{feature} (v2)
             centroid_cols = [f'state_{engine_name}_{f}' for f in available]
             centroid_available = [c for c in centroid_cols if c in state_row.columns]
+
+            if len(centroid_available) != len(available):
+                # Try v2 naming: centroid_{feature}
+                centroid_cols = [f'centroid_{f}' for f in available]
+                centroid_available = [c for c in centroid_cols if c in state_row.columns]
 
             if len(centroid_available) != len(available):
                 continue
@@ -239,13 +282,14 @@ def compute_signal_geometry(
             matrix = group.select(available).to_numpy()
 
             # Compute PC1 for this engine at this index
-            # (Simple: use SVD on centered data)
+            # (Use normalized data to prevent extreme values dominating)
             valid_mask = np.isfinite(matrix).all(axis=1)
             if valid_mask.sum() >= 2:
                 valid_matrix = matrix[valid_mask]
-                centered = valid_matrix - centroid
+                # Normalize before SVD to prevent cv/range_ratio from dominating
+                normalized = normalize_for_svd(valid_matrix, available)
                 try:
-                    U, S, Vt = np.linalg.svd(centered, full_matrices=False)
+                    U, S, Vt = np.linalg.svd(normalized, full_matrices=False)
                     principal_components = Vt
                 except:
                     principal_components = None
