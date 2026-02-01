@@ -10,12 +10,11 @@ from typing import List, Dict, Any
 import os
 
 
-# Available SQL engines
+# Available SQL engines (no classification - that's ORTHON's job)
 SQL_ENGINES = [
     'zscore',
     'correlation',
     'statistics',
-    'regime_assignment'
 ]
 
 

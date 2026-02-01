@@ -1,33 +1,37 @@
 """
 PRISM CLI
 
-New architecture: Typology → Signal Vector → State Vector → Geometry
+Architecture:
+  ORTHON creates typology.parquet → PRISM reads it and computes everything else
+  Signal Vector → State Vector → Geometry → Geometry Dynamics → Dynamics → SQL
 
 Usage:
     python -m prism <data_dir>                    # Run full pipeline
-    python -m prism typology <data_dir>           # Run typology only
     python -m prism signal-vector <data_dir>      # Run signal vector (aggregate)
     python -m prism signal-vector-temporal <data_dir>  # Run signal vector (temporal)
     python -m prism state-vector <data_dir>       # Run state vector
-    python -m prism dynamics <data_dir>           # Run dynamics
-    python -m prism geometry <data_dir>           # Run geometry pipeline
-    python -m prism --legacy <manifest.yaml>      # Run legacy 53-engine pipeline
+    python -m prism geometry <data_dir>           # Run geometry (state + signal + pairwise)
+    python -m prism geometry-dynamics <data_dir>  # Run geometry dynamics
+    python -m prism lyapunov <data_dir>           # Run Lyapunov exponents
+    python -m prism dynamics <data_dir>           # Run dynamics (RQA, info flow)
+    python -m prism sql <data_dir>                # Run SQL engines
+
+Note: Typology is created by ORTHON, not PRISM. PRISM expects typology.parquet to exist.
 """
 
 import sys
 from pathlib import Path
 
 
-def run_typology(data_dir: Path) -> dict:
-    """Run typology engine."""
-    from prism.engines.typology_engine import run_typology as run_typ
-
-    obs_path = data_dir / 'observations.parquet'
-    output_path = data_dir / 'typology.parquet'
-
-    print(f"[TYPOLOGY] {obs_path} → {output_path}")
-    result = run_typ(str(obs_path), str(output_path))
-    return {'typology': output_path, 'rows': len(result)}
+def check_typology(data_dir: Path) -> bool:
+    """Check that typology.parquet exists (created by ORTHON)."""
+    typology_path = data_dir / 'typology.parquet'
+    if not typology_path.exists():
+        print(f"ERROR: typology.parquet not found in {data_dir}")
+        print("       Typology is created by ORTHON, not PRISM.")
+        print("       Run ORTHON first to generate typology.parquet")
+        return False
+    return True
 
 
 def run_signal_vector(data_dir: Path, temporal: bool = True) -> dict:
@@ -67,13 +71,24 @@ def run_state_vector(data_dir: Path) -> dict:
 
 
 def run_geometry(data_dir: Path) -> dict:
-    """Run geometry pipeline (signal_geometry + signal_pairwise)."""
-    import polars as pl
-
+    """Run geometry pipeline (state_geometry + signal_geometry + signal_pairwise)."""
     signal_vector_path = data_dir / 'signal_vector.parquet'
     state_vector_path = data_dir / 'state_vector.parquet'
 
     results = {}
+
+    # State geometry (eigenvalues)
+    print(f"[STATE GEOMETRY]")
+    from prism.engines.state_geometry import compute_state_geometry
+    try:
+        state_geom = compute_state_geometry(
+            str(signal_vector_path), str(state_vector_path),
+            str(data_dir / 'state_geometry.parquet')
+        )
+        results['state_geometry'] = len(state_geom)
+    except Exception as e:
+        print(f"  Warning: {e}")
+        results['state_geometry'] = 0
 
     # Signal geometry
     print(f"[SIGNAL GEOMETRY]")
@@ -102,6 +117,59 @@ def run_geometry(data_dir: Path) -> dict:
         results['signal_pairwise'] = 0
 
     return results
+
+
+def run_geometry_dynamics(data_dir: Path) -> dict:
+    """Run geometry dynamics pipeline."""
+    from prism.engines.geometry_dynamics import compute_all_dynamics
+
+    state_geometry_path = data_dir / 'state_geometry.parquet'
+    signal_geometry_path = data_dir / 'signal_geometry.parquet'
+    signal_pairwise_path = data_dir / 'signal_pairwise.parquet'
+
+    results = {}
+
+    print(f"[GEOMETRY DYNAMICS]")
+    try:
+        dynamics_results = compute_all_dynamics(
+            str(state_geometry_path),
+            str(signal_geometry_path),
+            str(signal_pairwise_path) if signal_pairwise_path.exists() else None,
+            str(data_dir),
+            verbose=True
+        )
+        results['geometry_dynamics'] = len(dynamics_results.get('geometry', []))
+        results['signal_dynamics'] = len(dynamics_results.get('signal', []))
+        results['pairwise_dynamics'] = len(dynamics_results.get('pairwise', []))
+    except Exception as e:
+        print(f"  Warning: {e}")
+        results['geometry_dynamics'] = 0
+        results['signal_dynamics'] = 0
+        results['pairwise_dynamics'] = 0
+
+    return results
+
+
+def run_lyapunov(data_dir: Path) -> dict:
+    """Run Lyapunov engine."""
+    from prism.engines.lyapunov_engine import compute_lyapunov_for_signal_vector
+
+    signal_vector_path = data_dir / 'signal_vector.parquet'
+    observations_path = data_dir / 'observations.parquet'
+    output_path = data_dir / 'lyapunov.parquet'
+
+    print(f"[LYAPUNOV]")
+    try:
+        result = compute_lyapunov_for_signal_vector(
+            str(signal_vector_path),
+            str(observations_path),
+            str(output_path),
+            verbose=True,
+        )
+        return {'lyapunov': output_path, 'rows': len(result)}
+    except Exception as e:
+        print(f"  Warning: {e}")
+        return {'lyapunov': None, 'rows': 0}
 
 
 def run_dynamics(data_dir: Path) -> dict:
@@ -134,7 +202,7 @@ def run_dynamics(data_dir: Path) -> dict:
 
 
 def run_sql(data_dir: Path) -> dict:
-    """Run SQL engines."""
+    """Run SQL engines (no classification - that's ORTHON's job)."""
     from prism.sql_runner import SQLRunner
 
     obs_path = data_dir / 'observations.parquet'
@@ -147,28 +215,37 @@ def run_sql(data_dir: Path) -> dict:
 
 
 def run_full_pipeline(data_dir: Path) -> dict:
-    """Run full new pipeline."""
+    """Run full PRISM pipeline (requires typology.parquet from ORTHON)."""
     print("=" * 70)
-    print("PRISM PIPELINE (New Architecture)")
+    print("PRISM PIPELINE")
     print("=" * 70)
     print(f"Data directory: {data_dir}")
     print()
 
+    # Check typology exists (created by ORTHON)
+    if not check_typology(data_dir):
+        return {'error': 'typology.parquet not found'}
+
+    print("[TYPOLOGY] ✓ Found (created by ORTHON)")
+
     results = {}
 
-    # 1. Typology
-    results['typology'] = run_typology(data_dir)
-
-    # 2. Signal Vector (temporal - includes I column)
+    # 1. Signal Vector (temporal - includes I column)
     results['signal_vector'] = run_signal_vector(data_dir, temporal=True)
 
-    # 3. State Vector
+    # 2. State Vector
     results['state_vector'] = run_state_vector(data_dir)
 
-    # 4. Geometry
+    # 3. Geometry (state_geometry + signal_geometry + signal_pairwise)
     results['geometry'] = run_geometry(data_dir)
 
-    # 5. SQL
+    # 4. Geometry Dynamics (geometry_dynamics + signal_dynamics + pairwise_dynamics)
+    results['geometry_dynamics'] = run_geometry_dynamics(data_dir)
+
+    # 5. Dynamics (Lyapunov, RQA, etc.)
+    results['dynamics'] = run_dynamics(data_dir)
+
+    # 6. SQL (no classification)
     results['sql'] = run_sql(data_dir)
 
     print()
@@ -177,12 +254,6 @@ def run_full_pipeline(data_dir: Path) -> dict:
     print("=" * 70)
 
     return results
-
-
-def run_legacy(manifest_path: Path) -> dict:
-    """Run legacy 53-engine pipeline."""
-    from prism._legacy.runner import run
-    return run(manifest_path)
 
 
 def main():
@@ -194,22 +265,14 @@ def main():
 
     arg1 = sys.argv[1]
 
-    # Legacy mode
-    if arg1 == '--legacy':
-        if len(sys.argv) < 3:
-            print("Usage: python -m prism --legacy <manifest.yaml>")
-            sys.exit(1)
-        result = run_legacy(Path(sys.argv[2]))
-        print(f"Results: {result}")
-        return 0
-
     # Command mode
     commands = {
-        'typology': lambda d: run_typology(d),
         'signal-vector': lambda d: run_signal_vector(d, temporal=False),
         'signal-vector-temporal': lambda d: run_signal_vector(d, temporal=True),
         'state-vector': lambda d: run_state_vector(d),
         'geometry': lambda d: run_geometry(d),
+        'geometry-dynamics': lambda d: run_geometry_dynamics(d),
+        'lyapunov': lambda d: run_lyapunov(d),
         'dynamics': lambda d: run_dynamics(d),
         'sql': lambda d: run_sql(d),
     }

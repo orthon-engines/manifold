@@ -1,188 +1,210 @@
 # PRISM
 
-**Persistent Relational Inference & Structural Measurement**
+**Pure Relational Inference & Structural Measurement**
 
 A behavioral geometry engine for signal topology analysis. PRISM transforms raw observations into eigenvalue-based state representations that capture the SHAPE of signal distributions.
+
+**PRISM computes numbers. ORTHON classifies.**
 
 ---
 
 ## Quick Start
 
 ```bash
-# Run full pipeline on a data directory
+# Run full pipeline
 python -m prism data/cmapss
 
 # Run individual stages
-python -m prism typology data/cmapss
-python -m prism signal-vector data/cmapss
+python -m prism signal-vector-temporal data/cmapss
 python -m prism state-vector data/cmapss
 python -m prism geometry data/cmapss
+python -m prism geometry-dynamics data/cmapss
+python -m prism lyapunov data/cmapss
 python -m prism dynamics data/cmapss
+python -m prism sql data/cmapss
+```
 
-# Run temporal signal vector (for dynamics)
-python -m prism signal-vector-temporal data/cmapss
+**Note:** PRISM expects `typology.parquet` to exist (created by ORTHON).
 
-# Run legacy 53-engine pipeline
-python -m prism --legacy data/manifest.yaml
+---
+
+## Architecture
+
+```
+observations.parquet (raw signals)
+        │
+        ▼
+┌─────────────────────────────────────────────┐
+│            TYPOLOGY (ORTHON)                │
+│  Signal classification from raw observations │
+│  Creates: typology.parquet + manifest.yaml  │
+│  ORTHON's only computation                  │
+└─────────────────────────────────────────────┘
+        │
+        ▼
+┌─────────────────────────────────────────────┐
+│        SIGNAL_VECTOR (PRISM)                │
+│  Per-signal features at each I              │
+│  (kurtosis, skewness, entropy, hurst, etc.) │
+│  Scale-invariant only                       │
+│  Output: signal_vector.parquet              │
+└─────────────────────────────────────────────┘
+        │
+        ▼
+┌─────────────────────────────────────────────┐
+│         STATE_VECTOR (PRISM)                │
+│  Centroid = mean position in feature space  │
+│  WHERE the system is                        │
+│  NO eigenvalues here                        │
+│  Output: state_vector.parquet               │
+└─────────────────────────────────────────────┘
+        │
+        ▼
+┌─────────────────────────────────────────────┐
+│        STATE_GEOMETRY (PRISM)               │
+│  SVD → eigenvalues, effective_dim           │
+│  SHAPE of signal cloud                      │
+│  This is where eigenvalues live             │
+│  Output: state_geometry.parquet             │
+└─────────────────────────────────────────────┘
+        │
+        ▼
+┌─────────────────────────────────────────────┐
+│  SIGNAL_GEOMETRY + PAIRWISE (PRISM)         │
+│  Signal-to-centroid distances               │
+│  Signal-to-signal relationships             │
+│  Output: signal_geometry.parquet            │
+│          signal_pairwise.parquet            │
+└─────────────────────────────────────────────┘
+        │
+        ▼
+┌─────────────────────────────────────────────┐
+│      GEOMETRY_DYNAMICS (PRISM)              │
+│  Derivatives: velocity, acceleration, jerk  │
+│  Output: geometry_dynamics.parquet          │
+│          signal_dynamics.parquet            │
+│          pairwise_dynamics.parquet          │
+└─────────────────────────────────────────────┘
+        │
+        ▼
+┌─────────────────────────────────────────────┐
+│         DYNAMICS LAYER (PRISM)              │
+│  Lyapunov exponents, RQA, transfer entropy  │
+│  Output: lyapunov.parquet                   │
+│          dynamics.parquet                   │
+│          information_flow.parquet           │
+└─────────────────────────────────────────────┘
+        │
+        ▼
+┌─────────────────────────────────────────────┐
+│          SQL LAYER (PRISM)                  │
+│  Aggregations and normalization             │
+│  Output: zscore.parquet                     │
+│          statistics.parquet                 │
+│          correlation.parquet                │
+└─────────────────────────────────────────────┘
 ```
 
 ---
 
-## Architecture (v2)
+## Input Schema (v2.0)
 
 ```
 observations.parquet
-       ↓
-┌──────────────────────────────────────────────────────────────┐
-│                    TYPOLOGY ENGINE                           │
-│  Signal characterization: smoothness, periodicity, tails     │
-│  Output: typology.parquet                                    │
-└──────────────────────────────────────────────────────────────┘
-       ↓
-┌──────────────────────────────────────────────────────────────┐
-│                   SIGNAL VECTOR                              │
-│  Per-signal features (scale-invariant only)                  │
-│  Aggregate: signal_vector.parquet (one row per signal)       │
-│  Temporal:  signal_vector_temporal.parquet (with I column)   │
-└──────────────────────────────────────────────────────────────┘
-       ↓
-┌──────────────────────────────────────────────────────────────┐
-│                    STATE VECTOR                              │
-│  System state via eigenvalues (SVD)                          │
-│  - Eigenvalues capture SHAPE of signal cloud                 │
-│  - effective_dim from participation ratio                    │
-│  - Multi-mode detection                                      │
-│  - Engine disagreement (shape vs spectral views)             │
-│  Output: state_vector.parquet                                │
-└──────────────────────────────────────────────────────────────┘
-       ↓
-┌──────────────────────────────────────────────────────────────┐
-│                  GEOMETRY LAYER                              │
-│  state_geometry.parquet   - per-engine eigenvalues over time │
-│  signal_geometry.parquet  - per-signal distance to state     │
-│  signal_pairwise.parquet  - pairwise signal relationships    │
-└──────────────────────────────────────────────────────────────┘
-       ↓
-┌──────────────────────────────────────────────────────────────┐
-│               GEOMETRY DYNAMICS LAYER                        │
-│  "You have position. You have shape. Here are derivatives."  │
-│  geometry_dynamics.parquet - velocity, acceleration, jerk    │
-│  signal_dynamics.parquet   - per-signal trajectory analysis  │
-│  Collapse detection, trajectory classification               │
-└──────────────────────────────────────────────────────────────┘
-       ↓
-┌──────────────────────────────────────────────────────────────┐
-│                  DYNAMICS LAYER                              │
-│  dynamics.parquet        - Lyapunov, RQA, attractor          │
-│  information_flow.parquet - Transfer entropy, Granger        │
-└──────────────────────────────────────────────────────────────┘
-       ↓
-┌──────────────────────────────────────────────────────────────┐
-│                   SQL LAYER                                  │
-│  zscore.parquet          - Normalized metrics                │
-│  statistics.parquet      - Summary statistics                │
-│  correlation.parquet     - Correlation matrix                │
-│  regime_assignment.parquet - State labels                    │
-└──────────────────────────────────────────────────────────────┘
+├── signal_id  (str)     # Required: signal name
+├── I          (UInt32)  # Required: sequential index 0,1,2... per signal_id
+├── value      (Float64) # Required: measurement
+└── unit_id    (str)     # Optional: pass-through label (cargo only)
 ```
+
+**I is canonical.** Sequential integers per signal_id. Not timestamps.
+
+**unit_id is cargo.** Passes through, has ZERO effect on compute.
+
+---
+
+## Output Files (14 total)
+
+### From ORTHON (input to PRISM)
+| File | Description |
+|------|-------------|
+| `typology.parquet` | Signal characterization |
+| `manifest.yaml` | Engine selection per signal |
+
+### Feature Layer (PRISM)
+| File | Description |
+|------|-------------|
+| `signal_vector.parquet` | Per-signal features with I |
+
+### State Layer (PRISM)
+| File | Description |
+|------|-------------|
+| `state_vector.parquet` | Centroid (position) per I |
+
+### Geometry Layer (PRISM)
+| File | Description |
+|------|-------------|
+| `state_geometry.parquet` | Eigenvalues, effective_dim per I |
+| `signal_geometry.parquet` | Signal-to-centroid distances |
+| `signal_pairwise.parquet` | Pairwise signal relationships |
+
+### Geometry Dynamics (PRISM)
+| File | Description |
+|------|-------------|
+| `geometry_dynamics.parquet` | State trajectory derivatives |
+| `signal_dynamics.parquet` | Per-signal trajectories |
+| `pairwise_dynamics.parquet` | Pairwise trajectories |
+
+### Dynamics Layer (PRISM)
+| File | Description |
+|------|-------------|
+| `lyapunov.parquet` | Lyapunov exponents |
+| `dynamics.parquet` | RQA, attractor metrics |
+| `information_flow.parquet` | Transfer entropy, Granger |
+
+### SQL Layer (PRISM)
+| File | Description |
+|------|-------------|
+| `zscore.parquet` | Z-score normalized |
+| `statistics.parquet` | Summary statistics |
+| `correlation.parquet` | Correlation matrix |
 
 ---
 
 ## Key Concepts
 
-### Typology-Guided Engine Selection
+### Typology (Lives in ORTHON)
 
-Not all engines run on all signals. The typology engine classifies each signal:
+**Typology is the ONLY computation in ORTHON.** It classifies signals and creates manifest.yaml specifying which engines PRISM should run.
 
-| Classification | Engines Selected |
-|----------------|------------------|
-| SMOOTH | rolling_kurtosis, rolling_entropy, rolling_crest_factor |
-| NOISY | kurtosis, entropy, crest_factor (larger window) |
-| IMPULSIVE | kurtosis, crest_factor, peak_ratio |
-| PERIODIC | harmonics_ratio, band_ratios, spectral_centroid |
-| APERIODIC | entropy, hurst |
-| NON_STATIONARY | rolling engines only (global stats meaningless) |
+### State Vector vs State Geometry
+
+| File | Computes | Analogy |
+|------|----------|---------|
+| state_vector | Centroid (mean position) | WHERE the system is |
+| state_geometry | Eigenvalues (SVD) | SHAPE of signal cloud |
 
 ### Scale-Invariant Features Only
 
-All features are scale-invariant (ratios, entropy, kurtosis). Deprecated:
-- rms, peak, mean, std (absolute values)
-- rolling_rms, rolling_mean, rolling_std, rolling_range
-- envelope, total_power
+All features are ratios, entropy, or shape metrics. Deprecated: rms, peak, mean, std.
 
-### Eigenvalue-Based State
-
-The state vector uses SVD to compute eigenvalues of the signal distribution:
+### Eigenvalue-Based Geometry
 
 ```python
-# Centroid (position in feature space)
-centroid = mean(signal_matrix, axis=0)
-
-# Eigenvalues (shape of signal cloud)
+# In state_geometry.py:
 U, S, Vt = svd(signal_matrix - centroid)
 eigenvalues = S² / (N - 1)
-
-# Effective dimension (participation ratio)
 effective_dim = (Σλ)² / Σλ²
-
-# Multi-mode detection
-is_multimode = (λ₂/λ₁ > 0.5) and (n_significant_modes >= 2)
 ```
 
-**Key insight:** For two signals to occupy the same state, they must match across ALL feature dimensions. Eigenvalues capture this shape.
+### Geometry Dynamics
 
-### Geometry Dynamics (Differential Geometry)
+Differential geometry on state evolution:
+- **velocity** = dx/dt
+- **acceleration** = d²x/dt²
+- **jerk** = d³x/dt³
 
-The geometry dynamics engine computes derivatives of the geometry evolution:
-
-```python
-# First derivative (velocity/tangent)
-dx/dt = (x[t+1] - x[t-1]) / (2*dt)
-
-# Second derivative (acceleration/curvature)
-d²x/dt² = (x[t+1] - 2*x[t] + x[t-1]) / dt²
-
-# Third derivative (jerk/torsion)
-d³x/dt³ = derivative of acceleration
-
-# Curvature
-κ = |d²x/dt²| / (1 + (dx/dt)²)^(3/2)
-```
-
-**Trajectory Classification:**
-| Type | Meaning |
-|------|---------|
-| STABLE | Low velocity and acceleration |
-| CONVERGING | Moving toward equilibrium |
-| DIVERGING | Moving away from equilibrium |
-| OSCILLATING | Velocity changes sign periodically |
-| CHAOTIC | High variability in derivatives |
-| COLLAPSING | Sustained loss of effective dimension |
-| EXPANDING | Sustained gain in effective dimension |
-
-**Collapse Detection:** Identifies when effective_dim has sustained negative velocity - the system is losing degrees of freedom.
-
----
-
-## Output Files
-
-| File | Description | Rows |
-|------|-------------|------|
-| typology.parquet | Signal characterization | units × signals |
-| signal_vector.parquet | Per-signal features | units × signals |
-| signal_vector_temporal.parquet | Features with I column | units × signals × time |
-| state_vector.parquet | System state | units |
-| state_geometry.parquet | Per-engine eigenvalues over time | units × engines × time |
-| signal_geometry.parquet | Signal-to-state relationships | units × signals |
-| signal_pairwise.parquet | Pairwise relationships | units × N²/2 pairs |
-| geometry_dynamics.parquet | Derivatives of geometry evolution | units × engines × time |
-| signal_dynamics.parquet | Per-signal trajectory dynamics | units × signals × time |
-| dynamics.parquet | Lyapunov, RQA, attractor | units × signals |
-| information_flow.parquet | Transfer entropy, Granger | units × N² pairs |
-| zscore.parquet | Normalized metrics | observations |
-| statistics.parquet | Summary statistics | units × signals |
-| correlation.parquet | Correlation matrix | units × signals² |
-| regime_assignment.parquet | State labels | observations |
+**PRISM computes derivatives. ORTHON interprets trajectories.**
 
 ---
 
@@ -191,49 +213,49 @@ d³x/dt³ = derivative of acceleration
 ```
 prism/
 ├── prism/
-│   ├── cli.py                    # Main CLI
-│   ├── signal_vector.py          # Aggregate signal features
-│   ├── signal_vector_temporal.py # Temporal signal features
-│   ├── sql_runner.py             # SQL engine runner
+│   ├── cli.py
+│   ├── signal_vector_temporal.py
+│   ├── sql_runner.py
 │   │
-│   ├── engines/
-│   │   ├── engine_manifest.yaml  # Scale-invariant engine config
-│   │   ├── typology_engine.py    # Signal characterization
-│   │   ├── state_vector.py       # Eigenvalue-based state
-│   │   ├── state_geometry.py     # Per-engine eigenvalues
-│   │   ├── signal_geometry.py    # Signal-to-state relationships
-│   │   ├── signal_pairwise.py    # Pairwise relationships
-│   │   ├── geometry_dynamics.py  # Differential geometry (derivatives)
-│   │   ├── dynamics_runner.py    # Lyapunov, RQA
-│   │   ├── information_flow_runner.py  # Transfer entropy, Granger
-│   │   ├── signal/               # Individual signal engines
-│   │   ├── rolling/              # Rolling window engines
-│   │   └── sql/                  # SQL engines
-│   │
-│   └── _legacy/                  # Legacy 53-engine pipeline
-│       ├── runner.py
-│       ├── python_runner.py
-│       └── ram_manager.py
+│   └── engines/
+│       ├── state_vector.py       # Centroid only
+│       ├── state_geometry.py     # Eigenvalues here
+│       ├── signal_geometry.py
+│       ├── signal_pairwise.py
+│       ├── geometry_dynamics.py
+│       ├── lyapunov_engine.py
+│       ├── dynamics_runner.py
+│       ├── information_flow_runner.py
+│       ├── signal/               # Per-signal engines
+│       ├── rolling/              # Rolling window engines
+│       └── sql/                  # SQL engines
 │
-├── data/
-│   └── cmapss/                   # C-MAPSS turbofan dataset
-│       ├── observations.parquet
-│       ├── typology.parquet
-│       ├── signal_vector.parquet
-│       └── state_vector.parquet
-│
-└── ENGINE_INVENTORY.md           # Full engine inventory
+└── data/
 ```
+
+---
+
+## Rules
+
+1. **PRISM computes, ORTHON classifies** - no labels, no thresholds in PRISM
+2. **Typology lives in ORTHON** - PRISM receives manifest.yaml
+3. **state_vector = centroid, state_geometry = eigenvalues** - separate concerns
+4. **Scale-invariant features only** - no absolute values
+5. **I is canonical** - sequential per signal_id, not timestamps
+6. **unit_id is cargo** - never in groupby
+
+---
+
+## Do NOT
+
+- Put classification logic in PRISM
+- Compute eigenvalues in state_vector (they belong in state_geometry)
+- Use deprecated scale-dependent engines
+- Include unit_id in groupby operations
+- Create typology in PRISM (ORTHON's job)
 
 ---
 
 ## Credits
 
 - **Avery Rudder** - "Laplace transform IS the state engine" - eigenvalue insight
-- Architecture: Typology-guided, scale-invariant, eigenvalue-based
-
----
-
-## License
-
-MIT

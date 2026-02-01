@@ -52,6 +52,11 @@ def compute_eigenvalues(
     This is the SHAPE of the signal cloud - how signals spread
     around the state (centroid).
 
+    Steps:
+        1. Center signals around centroid
+        2. Z-score normalize (so features are comparable)
+        3. SVD to get eigenvalues
+
     Args:
         signal_matrix: N_signals × D_features
         centroid: D_features centroid from state_vector
@@ -79,10 +84,19 @@ def compute_eigenvalues(
     centered = signal_matrix - centroid
 
     # ─────────────────────────────────────────────────
+    # Z-SCORE NORMALIZE BEFORE SVD
+    # Without this, features with large variance dominate
+    # eigenvalues, making them incomparable across time
+    # ─────────────────────────────────────────────────
+    std = np.std(centered, axis=0, keepdims=True)
+    std = np.where(std < 1e-10, 1.0, std)  # Avoid div by zero
+    normalized = centered / std
+
+    # ─────────────────────────────────────────────────
     # SVD FOR EIGENVALUES
     # ─────────────────────────────────────────────────
     try:
-        U, S, Vt = np.linalg.svd(centered, full_matrices=False)
+        U, S, Vt = np.linalg.svd(normalized, full_matrices=False)
 
         # Eigenvalues of covariance = S² / (N-1)
         eigenvalues = (S ** 2) / max(N - 1, 1)
