@@ -58,8 +58,17 @@ observations.parquet
        ↓
 ┌──────────────────────────────────────────────────────────────┐
 │                  GEOMETRY LAYER                              │
+│  state_geometry.parquet   - per-engine eigenvalues over time │
 │  signal_geometry.parquet  - per-signal distance to state     │
 │  signal_pairwise.parquet  - pairwise signal relationships    │
+└──────────────────────────────────────────────────────────────┘
+       ↓
+┌──────────────────────────────────────────────────────────────┐
+│               GEOMETRY DYNAMICS LAYER                        │
+│  "You have position. You have shape. Here are derivatives."  │
+│  geometry_dynamics.parquet - velocity, acceleration, jerk    │
+│  signal_dynamics.parquet   - per-signal trajectory analysis  │
+│  Collapse detection, trajectory classification               │
 └──────────────────────────────────────────────────────────────┘
        ↓
 ┌──────────────────────────────────────────────────────────────┐
@@ -122,6 +131,37 @@ is_multimode = (λ₂/λ₁ > 0.5) and (n_significant_modes >= 2)
 
 **Key insight:** For two signals to occupy the same state, they must match across ALL feature dimensions. Eigenvalues capture this shape.
 
+### Geometry Dynamics (Differential Geometry)
+
+The geometry dynamics engine computes derivatives of the geometry evolution:
+
+```python
+# First derivative (velocity/tangent)
+dx/dt = (x[t+1] - x[t-1]) / (2*dt)
+
+# Second derivative (acceleration/curvature)
+d²x/dt² = (x[t+1] - 2*x[t] + x[t-1]) / dt²
+
+# Third derivative (jerk/torsion)
+d³x/dt³ = derivative of acceleration
+
+# Curvature
+κ = |d²x/dt²| / (1 + (dx/dt)²)^(3/2)
+```
+
+**Trajectory Classification:**
+| Type | Meaning |
+|------|---------|
+| STABLE | Low velocity and acceleration |
+| CONVERGING | Moving toward equilibrium |
+| DIVERGING | Moving away from equilibrium |
+| OSCILLATING | Velocity changes sign periodically |
+| CHAOTIC | High variability in derivatives |
+| COLLAPSING | Sustained loss of effective dimension |
+| EXPANDING | Sustained gain in effective dimension |
+
+**Collapse Detection:** Identifies when effective_dim has sustained negative velocity - the system is losing degrees of freedom.
+
 ---
 
 ## Output Files
@@ -132,8 +172,11 @@ is_multimode = (λ₂/λ₁ > 0.5) and (n_significant_modes >= 2)
 | signal_vector.parquet | Per-signal features | units × signals |
 | signal_vector_temporal.parquet | Features with I column | units × signals × time |
 | state_vector.parquet | System state | units |
+| state_geometry.parquet | Per-engine eigenvalues over time | units × engines × time |
 | signal_geometry.parquet | Signal-to-state relationships | units × signals |
 | signal_pairwise.parquet | Pairwise relationships | units × N²/2 pairs |
+| geometry_dynamics.parquet | Derivatives of geometry evolution | units × engines × time |
+| signal_dynamics.parquet | Per-signal trajectory dynamics | units × signals × time |
 | dynamics.parquet | Lyapunov, RQA, attractor | units × signals |
 | information_flow.parquet | Transfer entropy, Granger | units × N² pairs |
 | zscore.parquet | Normalized metrics | observations |
@@ -160,6 +203,7 @@ prism/
 │   │   ├── state_geometry.py     # Per-engine eigenvalues
 │   │   ├── signal_geometry.py    # Signal-to-state relationships
 │   │   ├── signal_pairwise.py    # Pairwise relationships
+│   │   ├── geometry_dynamics.py  # Differential geometry (derivatives)
 │   │   ├── dynamics_runner.py    # Lyapunov, RQA
 │   │   ├── information_flow_runner.py  # Transfer entropy, Granger
 │   │   ├── signal/               # Individual signal engines
