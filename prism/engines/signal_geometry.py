@@ -42,7 +42,7 @@ DEFAULT_FEATURE_GROUPS = {
 
 def compute_signal_geometry_at_index(
     signal_matrix: np.ndarray,
-    signal_names: List[str],
+    signal_ids: List[str],
     centroid: np.ndarray,
     principal_components: Optional[np.ndarray] = None
 ) -> List[Dict[str, Any]]:
@@ -51,7 +51,7 @@ def compute_signal_geometry_at_index(
 
     Args:
         signal_matrix: N_signals × D_features
-        signal_names: Names of signals
+        signal_ids: Names of signals
         centroid: D_features centroid from state_vector
         principal_components: Principal components from state_geometry (optional)
 
@@ -72,13 +72,13 @@ def compute_signal_geometry_at_index(
         pc1 = centroid
         pc1_norm = centroid_norm
 
-    for i, signal_name in enumerate(signal_names):
+    for i, signal_id in enumerate(signal_ids):
         signal = signal_matrix[i]
 
         # Skip invalid signals
         if not np.isfinite(signal).all():
             results.append({
-                'signal_name': signal_name,
+                'signal_id': signal_id,
                 'distance': np.nan,
                 'coherence': np.nan,
                 'contribution': np.nan,
@@ -130,7 +130,7 @@ def compute_signal_geometry_at_index(
             residual = signal_norm
 
         results.append({
-            'signal_name': signal_name,
+            'signal_id': signal_id,
             'distance': distance,
             'coherence': coherence,
             'contribution': contribution,
@@ -178,7 +178,7 @@ def compute_signal_geometry(
     # TODO: Store PCs in state_geometry and load them here
 
     # Identify features
-    meta_cols = ['unit_id', 'I', 'signal_name']
+    meta_cols = ['unit_id', 'I', 'signal_id']
     all_features = [c for c in signal_vector.columns if c not in meta_cols]
 
     # Determine feature groups
@@ -213,7 +213,7 @@ def compute_signal_geometry(
         if len(state_row) == 0:
             continue
 
-        signal_names = group['signal_name'].to_list()
+        signal_ids = group['signal_id'].to_list()
 
         # Compute geometry for each engine
         for engine_name, features in feature_groups.items():
@@ -249,7 +249,7 @@ def compute_signal_geometry(
 
             # Compute signal geometry
             geom_results = compute_signal_geometry_at_index(
-                matrix, signal_names, centroid, principal_components
+                matrix, signal_ids, centroid, principal_components
             )
 
             # Build result rows
@@ -257,7 +257,7 @@ def compute_signal_geometry(
                 row = {
                     'unit_id': unit_id,
                     'I': I,
-                    'signal_name': geom['signal_name'],
+                    'signal_id': geom['signal_id'],
                     'engine': engine_name,
                     f'distance_{engine_name}': geom['distance'],
                     f'coherence_{engine_name}': geom['coherence'],
@@ -273,11 +273,11 @@ def compute_signal_geometry(
     # Build DataFrame
     result = pl.DataFrame(results)
 
-    # Pivot to have one row per (unit_id, I, signal_name) with all engine columns
+    # Pivot to have one row per (unit_id, I, signal_id) with all engine columns
     if len(result) > 0:
-        result = result.group_by(['unit_id', 'I', 'signal_name', 'engine']).agg([
+        result = result.group_by(['unit_id', 'I', 'signal_id', 'engine']).agg([
             pl.col(c).first() for c in result.columns
-            if c not in ['unit_id', 'I', 'signal_name', 'engine']
+            if c not in ['unit_id', 'I', 'signal_id', 'engine']
         ])
 
     result.write_parquet(output_path)
@@ -303,7 +303,7 @@ CREATE OR REPLACE VIEW v_signal_geometry_shape AS
 SELECT
     sv.unit_id,
     sv.I,
-    sv.signal_name,
+    sv.signal_id,
     'shape' AS engine,
 
     -- Distance to centroid
@@ -390,7 +390,7 @@ def compute_signal_geometry_sql(
     con.execute(f"CREATE TABLE state_vector AS SELECT * FROM read_parquet('{state_vector_path}')")
 
     if verbose:
-        n_signals = con.execute("SELECT COUNT(DISTINCT signal_name) FROM signal_vector").fetchone()[0]
+        n_signals = con.execute("SELECT COUNT(DISTINCT signal_id) FROM signal_vector").fetchone()[0]
         n_indices = con.execute("SELECT COUNT(DISTINCT I) FROM signal_vector").fetchone()[0]
         print(f"Signals: {n_signals}, Indices: {n_indices}")
 
@@ -406,7 +406,7 @@ def compute_signal_geometry_sql(
 
     # Export
     try:
-        result = con.execute("SELECT * FROM v_signal_geometry_shape ORDER BY unit_id, I, signal_name").pl()
+        result = con.execute("SELECT * FROM v_signal_geometry_shape ORDER BY unit_id, I, signal_id").pl()
         result.write_parquet(output_path)
 
         if verbose:

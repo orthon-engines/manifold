@@ -46,7 +46,7 @@ FALLBACK_FEATURES = ['kurtosis', 'skewness', 'crest_factor']
 
 def compute_state_at_index(
     signal_matrix: np.ndarray,
-    signal_names: List[str],
+    signal_ids: List[str],
     feature_names: List[str],
     min_signals: int = 2
 ) -> Dict[str, Any]:
@@ -55,7 +55,7 @@ def compute_state_at_index(
 
     Args:
         signal_matrix: N_signals × D_features matrix
-        signal_names: Names of signals (rows)
+        signal_ids: Names of signals (rows)
         feature_names: Names of features (columns)
         min_signals: Minimum signals required for computation
 
@@ -74,7 +74,7 @@ def compute_state_at_index(
         return _empty_state(D, feature_names)
 
     signal_matrix = signal_matrix[valid_mask]
-    signal_names = [n for n, v in zip(signal_names, valid_mask) if v]
+    signal_ids = [n for n, v in zip(signal_ids, valid_mask) if v]
     N = signal_matrix.shape[0]
 
     # ─────────────────────────────────────────────────────────
@@ -208,7 +208,7 @@ def compute_state_at_index(
         'principal_components': principal_components,
 
         # Per-signal geometry
-        'signal_names': signal_names,
+        'signal_ids': signal_ids,
         'signal_distances': distances,
         'signal_coherences': coherences,
         'signal_projections': projections,
@@ -240,7 +240,7 @@ def _empty_state(D: int, feature_names: List[str]) -> Dict[str, Any]:
         'n_modes': 0,
         'eigenvalue_ratio_2_1': 0.0,
         'principal_components': np.eye(D),
-        'signal_names': [],
+        'signal_ids': [],
         'signal_distances': np.array([]),
         'signal_coherences': np.array([]),
         'signal_projections': np.array([]),
@@ -280,8 +280,8 @@ def compute_engine_states(
     engine_states = {}
 
     # Get signal name column
-    signal_col = 'signal_name' if 'signal_name' in signal_vectors_at_i.columns else 'signal_id'
-    signal_names = signal_vectors_at_i[signal_col].to_list()
+    signal_col = 'signal_id' if 'signal_id' in signal_vectors_at_i.columns else 'signal_id'
+    signal_ids = signal_vectors_at_i[signal_col].to_list()
 
     for engine_name, features in feature_groups.items():
         # Check which features are available
@@ -294,7 +294,7 @@ def compute_engine_states(
         matrix = signal_vectors_at_i.select(available).to_numpy()
 
         # Compute state for this view
-        state = compute_state_at_index(matrix, signal_names, available)
+        state = compute_state_at_index(matrix, signal_ids, available)
         state['engine_name'] = engine_name
 
         engine_states[engine_name] = state
@@ -423,8 +423,8 @@ def compute_state_vector(
     typology = pl.read_parquet(typology_path)
 
     # Get signal column name
-    signal_col = 'signal_name' if 'signal_name' in signal_vector.columns else 'signal_id'
-    typology_signal_col = 'signal_name' if 'signal_name' in typology.columns else 'signal_id'
+    signal_col = 'signal_id' if 'signal_id' in signal_vector.columns else 'signal_id'
+    typology_signal_col = 'signal_id' if 'signal_id' in typology.columns else 'signal_id'
 
     # Get active signals (not constant)
     active_signals = typology.filter(
@@ -436,7 +436,7 @@ def compute_state_vector(
     )
 
     # Identify available feature columns
-    meta_cols = ['unit_id', 'I', 'signal_name', 'signal_id', 'n_samples']
+    meta_cols = ['unit_id', 'I', 'signal_id', 'signal_id', 'n_samples']
     all_features = [c for c in signal_vector.columns if c not in meta_cols]
 
     if verbose:
@@ -502,7 +502,7 @@ def compute_state_vector(
         # ─────────────────────────────────────────────────
         # COMPOSITE STATE (all features)
         # ─────────────────────────────────────────────────
-        signal_names = group[signal_col].to_list()
+        signal_ids = group[signal_col].to_list()
 
         # Build composite matrix
         available_composite = [f for f in composite_features if f in group.columns]
@@ -511,7 +511,7 @@ def compute_state_vector(
 
         composite_matrix = group.select(available_composite).to_numpy()
         composite_state = compute_state_at_index(
-            composite_matrix, signal_names, available_composite
+            composite_matrix, signal_ids, available_composite
         )
 
         # ─────────────────────────────────────────────────

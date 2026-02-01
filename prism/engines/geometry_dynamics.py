@@ -543,7 +543,7 @@ def compute_signal_dynamics(
     """
     Compute dynamics of individual signal evolution.
 
-    For each (unit_id, signal_name), computes derivatives of:
+    For each (unit_id, signal_id), computes derivatives of:
     - distance to state
     - coherence to state
     - contribution
@@ -576,10 +576,10 @@ def compute_signal_dynamics(
         print(f"Distance columns: {distance_cols}")
         print(f"Coherence columns: {coherence_cols}")
 
-    # Process each (unit_id, signal_name)
+    # Process each (unit_id, signal_id)
     results = []
 
-    signal_col = 'signal_name' if 'signal_name' in signal_geometry.columns else 'signal_id'
+    signal_col = 'signal_id' if 'signal_id' in signal_geometry.columns else 'signal_id'
     groups = signal_geometry.group_by(['unit_id', signal_col], maintain_order=True)
     n_groups = signal_geometry.select(['unit_id', signal_col]).unique().height
 
@@ -587,9 +587,9 @@ def compute_signal_dynamics(
         print(f"Processing {n_groups} signal groups...")
 
     processed = 0
-    for (unit_id, signal_name), group in groups:
+    for (unit_id, signal_id), group in groups:
         # Skip null signal_id (unit_id can be null, signal_id cannot)
-        if signal_name is None:
+        if signal_id is None:
             continue
 
         # Sort by I
@@ -632,7 +632,7 @@ def compute_signal_dynamics(
                 row = {
                     'unit_id': unit_id,
                     'I': int(I_values[i]),
-                    'signal_name': signal_name,
+                    'signal_id': signal_id,
                     'engine': engine,
 
                     # Distance dynamics

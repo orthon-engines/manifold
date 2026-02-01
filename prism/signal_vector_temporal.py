@@ -2,7 +2,7 @@
 PRISM Signal Vector Temporal Engine
 
 Creates signal_vector.parquet WITH temporal I column.
-Each row is (unit_id, I, signal_name) with features computed
+Each row is (unit_id, I, signal_id) with features computed
 over a rolling window centered at index I.
 
 This is the BRIDGE between observations and the geometry/dynamics pipeline.
@@ -233,7 +233,7 @@ def compute_signal_vector_temporal(
     """
     Compute temporal signal vector with I column.
 
-    Each row is (unit_id, I, signal_name) with features computed
+    Each row is (unit_id, I, signal_id) with features computed
     over a rolling window.
 
     Args:
@@ -260,9 +260,9 @@ def compute_signal_vector_temporal(
     typology = pl.read_parquet(typology_path)
 
     # Detect column names
-    signal_col = 'signal_name' if 'signal_name' in observations.columns else 'signal_id'
+    signal_col = 'signal_id' if 'signal_id' in observations.columns else 'signal_id'
     value_col = 'value' if 'value' in observations.columns else 'y'
-    typology_signal_col = 'signal_name' if 'signal_name' in typology.columns else 'signal_id'
+    typology_signal_col = 'signal_id' if 'signal_id' in typology.columns else 'signal_id'
 
     if verbose:
         print(f"Signal column: {signal_col}")
@@ -301,9 +301,9 @@ def compute_signal_vector_temporal(
         print(f"Processing {n_groups} signal groups...")
 
     processed = 0
-    for (unit_id, signal_name), group in groups:
+    for (unit_id, signal_id), group in groups:
         # Skip null signal_id (unit_id can be null, signal_id cannot)
-        if signal_name is None:
+        if signal_id is None:
             continue
 
         # Sort by I
@@ -342,7 +342,7 @@ def compute_signal_vector_temporal(
             row = {
                 'unit_id': unit_id,
                 'I': int(I_values[i]),
-                'signal_name': signal_name,
+                'signal_id': signal_id,
                 'window_start': int(I_values[start]),
                 'window_end': int(I_values[end - 1]),
                 'window_size': end - start,
@@ -363,8 +363,8 @@ def compute_signal_vector_temporal(
 
     result = pl.DataFrame(results)
 
-    # Sort by unit_id, signal_name, I
-    result = result.sort(['unit_id', 'signal_name', 'I'])
+    # Sort by unit_id, signal_id, I
+    result = result.sort(['unit_id', 'signal_id', 'I'])
 
     # Save
     result.write_parquet(output_path)
@@ -412,13 +412,13 @@ def compute_signal_vector_temporal_sql(
 
     # Detect columns
     cols = con.execute("SELECT * FROM observations LIMIT 1").pl().columns
-    signal_col = 'signal_name' if 'signal_name' in cols else 'signal_id'
+    signal_col = 'signal_id' if 'signal_id' in cols else 'signal_id'
     value_col = 'value' if 'value' in cols else 'y'
 
     # SQL with window functions
     sql = f"""
     WITH active_signals AS (
-        SELECT DISTINCT {signal_col} as signal_name
+        SELECT DISTINCT {signal_col} as signal_id
         FROM typology
         WHERE is_constant = FALSE
     ),
@@ -427,7 +427,7 @@ def compute_signal_vector_temporal_sql(
         SELECT
             o.unit_id,
             o.I,
-            o.{signal_col} AS signal_name,
+            o.{signal_col} AS signal_id,
             o.{value_col} AS value,
 
             -- Window aggregates
@@ -440,7 +440,7 @@ def compute_signal_vector_temporal_sql(
             COUNT(*) OVER w AS window_size
 
         FROM observations o
-        INNER JOIN active_signals a ON o.{signal_col} = a.signal_name
+        INNER JOIN active_signals a ON o.{signal_col} = a.signal_id
         WINDOW w AS (
             PARTITION BY o.unit_id, o.{signal_col}
             ORDER BY o.I
@@ -451,7 +451,7 @@ def compute_signal_vector_temporal_sql(
     SELECT
         unit_id,
         I,
-        signal_name,
+        signal_id,
         window_size,
         kurtosis,
         skewness,
@@ -468,7 +468,7 @@ def compute_signal_vector_temporal_sql(
 
     FROM windowed
     WHERE window_size >= {window_size // 2}
-    ORDER BY unit_id, signal_name, I
+    ORDER BY unit_id, signal_id, I
     """
 
     result = con.execute(sql).pl()
@@ -547,11 +547,11 @@ def compute_signal_vector_temporal_hybrid(
     if verbose:
         print("\n[3/3] Merging results...")
 
-    # Join on (unit_id, I, signal_name)
+    # Join on (unit_id, I, signal_id)
     if len(python_result) > 0:
         combined = sql_result.join(
-            python_result.select(['unit_id', 'I', 'signal_name', 'entropy', 'hurst', 'autocorr', 'autocorr_10']),
-            on=['unit_id', 'I', 'signal_name'],
+            python_result.select(['unit_id', 'I', 'signal_id', 'entropy', 'hurst', 'autocorr', 'autocorr_10']),
+            on=['unit_id', 'I', 'signal_id'],
             how='left'
         )
     else:
@@ -583,7 +583,7 @@ Usage:
     python signal_vector_temporal.py --hybrid <observations.parquet> <typology.parquet> [output.parquet]
 
 Creates signal_vector.parquet WITH temporal I column:
-- unit_id, I, signal_name, kurtosis, skewness, entropy, hurst, ...
+- unit_id, I, signal_id, kurtosis, skewness, entropy, hurst, ...
 
 This bridges observations to the geometry/dynamics pipeline.
 """

@@ -214,7 +214,7 @@ def compute_state_geometry(
     state_vector = pl.read_parquet(state_vector_path)
 
     # Identify features
-    meta_cols = ['unit_id', 'I', 'signal_name']
+    meta_cols = ['unit_id', 'I', 'signal_id']
     all_features = [c for c in signal_vector.columns if c not in meta_cols]
 
     # Determine feature groups

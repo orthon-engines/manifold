@@ -44,7 +44,7 @@ DEFAULT_FEATURE_GROUPS = {
 
 def compute_pairwise_at_index(
     signal_matrix: np.ndarray,
-    signal_names: List[str],
+    signal_ids: List[str],
     centroid: Optional[np.ndarray] = None
 ) -> List[Dict[str, Any]]:
     """
@@ -52,7 +52,7 @@ def compute_pairwise_at_index(
 
     Args:
         signal_matrix: N_signals × D_features
-        signal_names: Names of signals
+        signal_ids: Names of signals
         centroid: Optional centroid for relative metrics
 
     Returns:
@@ -81,8 +81,8 @@ def compute_pairwise_at_index(
     for i, j in combinations(range(N), 2):
         signal_a = signal_matrix[i]
         signal_b = signal_matrix[j]
-        name_a = signal_names[i]
-        name_b = signal_names[j]
+        name_a = signal_ids[i]
+        name_b = signal_ids[j]
         norm_a = norms[i]
         norm_b = norms[j]
 
@@ -192,7 +192,7 @@ def compute_signal_pairwise(
     state_vector = pl.read_parquet(state_vector_path)
 
     # Identify features
-    meta_cols = ['unit_id', 'I', 'signal_name']
+    meta_cols = ['unit_id', 'I', 'signal_id']
     all_features = [c for c in signal_vector.columns if c not in meta_cols]
 
     # Determine feature groups
@@ -210,7 +210,7 @@ def compute_signal_pairwise(
         print(f"Feature groups: {list(feature_groups.keys())}")
 
         # Estimate output size
-        n_signals = signal_vector.select('signal_name').unique().height
+        n_signals = signal_vector.select('signal_id').unique().height
         n_pairs = n_signals * (n_signals - 1) // 2
         n_indices = signal_vector.select(['unit_id', 'I']).unique().height
         n_engines = len(feature_groups)
@@ -233,7 +233,7 @@ def compute_signal_pairwise(
             (pl.col('unit_id') == unit_id) & (pl.col('I') == I)
         )
 
-        signal_names = group['signal_name'].to_list()
+        signal_ids = group['signal_id'].to_list()
 
         # Compute pairwise for each engine
         for engine_name, features in feature_groups.items():
@@ -254,7 +254,7 @@ def compute_signal_pairwise(
                 centroid = np.mean(matrix[np.isfinite(matrix).all(axis=1)], axis=0) if len(matrix) > 0 else None
 
             # Compute pairwise
-            pairs = compute_pairwise_at_index(matrix, signal_names, centroid)
+            pairs = compute_pairwise_at_index(matrix, signal_ids, centroid)
 
             # Build result rows
             for pair in pairs:
@@ -310,7 +310,7 @@ WITH signal_features AS (
     SELECT
         unit_id,
         I,
-        signal_name,
+        signal_id,
         kurtosis,
         skewness,
         crest_factor,
@@ -321,8 +321,8 @@ WITH signal_features AS (
 SELECT
     a.unit_id,
     a.I,
-    a.signal_name AS signal_a,
-    b.signal_name AS signal_b,
+    a.signal_id AS signal_a,
+    b.signal_id AS signal_b,
     'shape' AS engine,
 
     -- Distance
@@ -340,7 +340,7 @@ FROM signal_features a
 JOIN signal_features b
     ON a.unit_id = b.unit_id
     AND a.I = b.I
-    AND a.signal_name < b.signal_name;  -- Only upper triangle
+    AND a.signal_id < b.signal_id;  -- Only upper triangle
 """
 
 
@@ -371,7 +371,7 @@ def compute_signal_pairwise_sql(
     con.execute(f"CREATE TABLE signal_vector AS SELECT * FROM read_parquet('{signal_vector_path}')")
 
     if verbose:
-        n_signals = con.execute("SELECT COUNT(DISTINCT signal_name) FROM signal_vector").fetchone()[0]
+        n_signals = con.execute("SELECT COUNT(DISTINCT signal_id) FROM signal_vector").fetchone()[0]
         n_pairs = n_signals * (n_signals - 1) // 2
         n_indices = con.execute("SELECT COUNT(DISTINCT I) FROM signal_vector").fetchone()[0]
         print(f"Signals: {n_signals} → Pairs: {n_pairs}")
