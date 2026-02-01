@@ -313,17 +313,21 @@ def check_data(
         if verbose:
             print(f"    + I is sequential for all unit/signal pairs")
 
-    # Check I starts at 0 per unit
-    min_i_check = df.group_by("unit_id").agg(pl.col("I").min().alias("min_i"))
+    # Check I starts at 0 per unit/signal pair
+    min_i_check = df.group_by(["unit_id", "signal_id"]).agg(pl.col("I").min().alias("min_i"))
     non_zero = min_i_check.filter(pl.col("min_i") != 0)
 
     if len(non_zero) > 0:
-        result.error("I_STARTS_ZERO", f"{len(non_zero)} units don't start at I=0")
+        result.error("I_STARTS_ZERO", f"{len(non_zero)} unit/signal pairs don't start at I=0")
         if verbose:
-            print(f"    X {len(non_zero)} units don't start at I=0")
+            print(f"    X {len(non_zero)} unit/signal pairs don't start at I=0")
+            sample = non_zero.head(3)
+            for row in sample.iter_rows(named=True):
+                unit = row['unit_id'] or '(blank)'
+                print(f"       - {unit}/{row['signal_id']}: starts at I={row['min_i']}")
     else:
         if verbose:
-            print(f"    + I starts at 0 for all units")
+            print(f"    + I starts at 0 for all unit/signal pairs")
 
     # =========================================================================
     # CHECK: MINIMUM SIGNALS
