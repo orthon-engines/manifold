@@ -435,9 +435,12 @@ def compute_signal_vector_temporal_sql(
             STDDEV(o.{value_col}) OVER w AS window_std,
             MIN(o.{value_col}) OVER w AS window_min,
             MAX(o.{value_col}) OVER w AS window_max,
-            KURTOSIS(o.{value_col}) OVER w AS kurtosis,
-            SKEWNESS(o.{value_col}) OVER w AS skewness,
-            COUNT(*) OVER w AS window_size
+            COUNT(*) OVER w AS window_size,
+            -- Moments for manual kurtosis/skewness (avoids DuckDB KURTOSIS error on low-variance)
+            SUM(o.{value_col}) OVER w AS m1_sum,
+            SUM(o.{value_col} * o.{value_col}) OVER w AS m2_sum,
+            SUM(o.{value_col} * o.{value_col} * o.{value_col}) OVER w AS m3_sum,
+            SUM(o.{value_col} * o.{value_col} * o.{value_col} * o.{value_col}) OVER w AS m4_sum
 
         FROM observations o
         INNER JOIN active_signals a ON o.{signal_col} = a.signal_id
@@ -453,8 +456,22 @@ def compute_signal_vector_temporal_sql(
         I,
         signal_id,
         window_size,
-        kurtosis,
-        skewness,
+
+        -- Kurtosis from moments (excess kurtosis = m4/m2^2 - 3)
+        -- Guard against division by zero for low-variance windows
+        CASE WHEN window_std > 1e-10 THEN
+            ((m4_sum / window_size) - 4 * window_mean * (m3_sum / window_size) +
+             6 * window_mean * window_mean * (m2_sum / window_size) -
+             3 * window_mean * window_mean * window_mean * window_mean) /
+            NULLIF(window_std * window_std * window_std * window_std, 0) - 3.0
+        ELSE NULL END AS kurtosis,
+
+        -- Skewness from moments (m3 / m2^1.5)
+        CASE WHEN window_std > 1e-10 THEN
+            ((m3_sum / window_size) - 3 * window_mean * (m2_sum / window_size) +
+             2 * window_mean * window_mean * window_mean) /
+            NULLIF(window_std * window_std * window_std, 0)
+        ELSE NULL END AS skewness,
 
         -- Crest factor (max / rms approximation)
         GREATEST(ABS(window_max), ABS(window_min)) /
