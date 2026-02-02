@@ -1,30 +1,43 @@
 """
-PRISM Engines
-=============
+PRISM Engines — DEPRECATED
+===========================
 
-Atomic engines organized by execution type:
+This module is a backward-compatibility redirect.
+Use the pipeline-stage modules directly:
 
-    signal/   - Signal-level (one value per signal)
-    rolling/  - Observation-level (rolling window)
-    sql/      - Pure SQL (DuckDB)
+    prism.signal_vector.signal    — per-signal engines
+    prism.signal_vector.rolling   — rolling window engines
+    prism.signal_vector.sql       — SQL engines
+    prism.state_vector            — state + geometry
+    prism.geometry_pairwise       — pair engines
+    prism.geometry_laplace        — dynamics engines
 
-Each engine computes ONE thing. No domain prefixes.
-Engines compose primitives from prism.primitives.
+This redirect will be removed in a future version.
 """
 
-# Lazy imports to allow direct engine access
-__all__ = ['signal', 'rolling', 'sql']
+import warnings
+
+warnings.warn(
+    "prism.engines is deprecated. "
+    "Use prism.signal_vector, prism.state_vector, "
+    "prism.geometry_pairwise, prism.geometry_laplace instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 
 def __getattr__(name):
-    """Lazy import of subpackages."""
+    """Redirect old imports to new locations."""
     if name == 'signal':
-        from . import signal
+        from prism.signal_vector import signal
         return signal
     elif name == 'rolling':
-        from . import rolling
+        from prism.signal_vector import rolling
         return rolling
     elif name == 'sql':
-        from . import sql
+        from prism.signal_vector import sql
         return sql
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+__all__ = ['signal', 'rolling', 'sql']
