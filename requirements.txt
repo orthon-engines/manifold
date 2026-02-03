@@ -25,5 +25,11 @@ statsmodels>=0.14.0    # Cointegration, time series
 fastapi>=0.100.0
 uvicorn>=0.23.0
 
+# YAML manifest support
+pyyaml>=6.0.0
+
+# RAM monitoring
+psutil>=5.9.0
+
 # Optional (for extended features)
 # umap-learn>=0.5.0    # UMAP dimensionality reduction
