@@ -77,19 +77,35 @@ PRISM must NEVER write to typology.parquet or modify its contents.
 
 ---
 
-## manifest.yaml Schema (v2.4)
+## manifest.yaml Schema (v2.5)
 
 The manifest is ORTHON's complete order to PRISM. PRISM executes exactly
 what the manifest says. No more, no less.
 
 ```yaml
-version: "2.4"
-job_id: "orthon-20260202-143052"
+version: "2.5"
+job_id: "orthon-20260203-143052"
 
 paths:
   observations: "observations.parquet"
   typology: "typology.parquet"
   output_dir: "output/"
+
+system:
+  window: 32                    # Default window for most engines
+  stride: 16
+  note: Common window for state_vector/geometry alignment
+
+# NEW IN v2.5: Engine minimum sample requirements
+# FFT-based engines need larger windows than simple statistics
+engine_windows:
+  spectral: 64
+  harmonics: 64
+  fundamental_freq: 64
+  thd: 64
+  sample_entropy: 64
+  hurst: 128
+  note: Minimum window sizes for FFT-based and long-range engines
 
 summary:
   total_signals: 14
@@ -137,6 +153,7 @@ signals:
     stride: 80                        # 75% overlap (non-stationary)
     derivative_depth: 2               # max derivative order
     eigenvalue_budget: 5              # max eigenvalues to compute
+    # No engine_window_overrides needed — window_size (320) >= all engine minimums
     typology:                         # identity card (read-only context)
       continuity: CONTINUOUS
       stationarity: NON_STATIONARY
@@ -157,23 +174,27 @@ signals:
 
   vib_x:
     engines:
-      - attractor
       - crest_factor
-      - cycle_counting
-      - entropy
-      - frequency_bands
-      - harmonics
       - kurtosis
-      - lyapunov
       - skewness
-      - spectral
+      - spectral                      # Needs 64 samples
+      - harmonics                     # Needs 64 samples
+      - fundamental_freq              # Needs 64 samples
+      - thd                           # Needs 64 samples
     rolling_engines: []
-    window_size: 480
-    window_method: period
+    window_size: 32                   # System window is small
+    window_method: acf_half_life
     window_confidence: high
-    stride: 240
+    stride: 16
     derivative_depth: 1
     eigenvalue_budget: 5
+    # NEW IN v2.5: Per-engine window overrides
+    # Listed when engine minimum > signal window_size
+    engine_window_overrides:
+      spectral: 64
+      harmonics: 64
+      fundamental_freq: 64
+      thd: 64
     typology:
       continuity: CONTINUOUS
       stationarity: STATIONARY
@@ -196,8 +217,6 @@ signals:
       harmonics:
         n_harmonics: 5
         include_thd: true
-      attractor:
-        mode: trajectory            # full trajectory for phase portrait
 
 # Constant signals — PRISM skips these entirely
 skip_signals:
@@ -218,33 +237,110 @@ symmetric_pair_engines:
 
 ---
 
+## Engine Minimum Sample Requirements (NEW in v2.5)
+
+Some engines require more samples than others due to mathematical constraints.
+
+| Engine | Minimum Samples | Reason |
+|--------|-----------------|--------|
+| spectral | 64 | FFT frequency resolution |
+| harmonics | 64 | FFT frequency resolution |
+| fundamental_freq | 64 | FFT frequency resolution |
+| thd | 64 | FFT frequency resolution |
+| sample_entropy | 64 | Statistical validity |
+| hurst | 128 | Long-range dependence estimation |
+| crest_factor | 4 | Simple peak/RMS ratio |
+| kurtosis | 4 | 4th statistical moment |
+| skewness | 4 | 3rd statistical moment |
+| perm_entropy | 8 | Permutation patterns |
+| acf_decay | 16 | Lag structure |
+| snr | 32 | Power estimation |
+| phase_coherence | 32 | Phase stability |
+
+**ORTHON's responsibility:** Generate `engine_window_overrides` when `window_size < engine_minimum`.
+
+**PRISM's responsibility:** Use override window when specified, maintain I alignment.
+
+---
+
 ## How PRISM Reads the Manifest
 
 ### Step 1: Load and Validate
 ```python
 manifest = yaml.safe_load(open('manifest.yaml'))
-assert manifest['version'] == '2.0'
+assert manifest['version'] in ['2.4', '2.5']
 ```
 
-### Step 2: Skip Constants
+### Step 2: Load Engine Windows (v2.5)
+```python
+engine_windows = manifest.get('engine_windows', {})
+```
+
+### Step 3: Skip Constants
 ```python
 skip = set(manifest.get('skip_signals', []))
 ```
 
-### Step 3: Per-Signal Execution
+### Step 4: Per-Signal Execution
 For each signal in `manifest['signals']`:
 1. Read `engines` list → run those signal-level engines
 2. Read `rolling_engines` list → run those rolling engines
 3. Use `window_size` and `stride` for windowing
-4. Use `derivative_depth` for how many derivatives to compute
-5. Use `eigenvalue_budget` for SVD truncation in state_geometry
-6. Use `output_hints` to configure engine output format
+4. **NEW:** Read `engine_window_overrides` → use expanded window for specific engines
+5. Use `derivative_depth` for how many derivatives to compute
+6. Use `eigenvalue_budget` for SVD truncation in state_geometry
+7. Use `output_hints` to configure engine output format
 
-### Step 4: Pair Execution
+### Step 4a: Engine Window Override Logic (NEW in v2.5)
+```python
+def get_engine_window(engine_name, signal_config, engine_windows):
+    """
+    Determine window size for a specific engine.
+
+    Priority:
+    1. signal_config['engine_window_overrides'][engine_name] (explicit override)
+    2. engine_windows[engine_name] (global minimum, if window_size < minimum)
+    3. signal_config['window_size'] (default)
+    """
+    overrides = signal_config.get('engine_window_overrides', {})
+    if engine_name in overrides:
+        return overrides[engine_name]
+
+    base_window = signal_config['window_size']
+    min_window = engine_windows.get(engine_name, 0)
+
+    if base_window < min_window:
+        return min_window
+
+    return base_window
+```
+
+### Step 4b: Window Alignment (CRITICAL)
+When using expanded windows, I (window end index) must remain consistent:
+
+```
+System window: 32, stride: 16
+Spectral override: 64
+
+For I=79 (window ending at index 79):
+  - 32-sample engines: extract data[48:80]
+  - 64-sample engines: extract data[16:80]
+
+Both windows END at index 79. Alignment preserved.
+```
+
+Early windows (where expanded window would extend before index 0) should return NaN:
+```
+I=31: 32-sample window [0:32] OK, 64-sample window [-32:32] → NaN
+I=47: 32-sample window [16:48] OK, 64-sample window [0:48] → short, NaN
+I=63: 32-sample window [32:64] OK, 64-sample window [0:64] → first valid
+```
+
+### Step 5: Pair Execution
 Run `pair_engines` on all ordered pairs of active signals.
 Run `symmetric_pair_engines` on all unordered pairs.
 
-### Step 5: Write Output
+### Step 6: Write Output
 PRISM writes parquet files to `manifest['paths']['output_dir']`.
 
 ---
@@ -255,7 +351,7 @@ Every engine name in the manifest maps to exactly one Python module in PRISM.
 If PRISM doesn't recognize an engine name, it logs a warning and skips it.
 PRISM never invents engines that aren't in the manifest.
 
-### Signal Engines (signal_vector/signal/)
+### Signal Engines (engines/signal/)
 ```
 kurtosis          skewness          crest_factor
 entropy           hurst             spectral
@@ -263,16 +359,16 @@ harmonics         frequency_bands   lyapunov
 garch             attractor         dmd
 pulsation_index   rate_of_change    time_constant
 cycle_counting    basin             lof
-envelope          rms               peak
+fundamental_freq  phase_coherence   snr
+thd               acf_decay         perm_entropy
+sample_entropy
 ```
 
-### Rolling Engines (signal_vector/rolling/)
+### Rolling Engines (engines/rolling/)
 ```
 rolling_kurtosis      rolling_skewness      rolling_entropy
 rolling_crest_factor  rolling_hurst         rolling_lyapunov
 rolling_volatility    rolling_pulsation
-rolling_rms           rolling_mean          rolling_std
-rolling_range         rolling_envelope
 derivatives           manifold              stability
 ```
 
@@ -383,6 +479,7 @@ ORTHON's typology or window_recommender, not in PRISM.
 6. **If manifest says skip signal Y, PRISM skips signal Y.**
 7. **If PRISM finds a bug in the manifest, PRISM logs it and continues.**
 8. **PRISM does not second-guess ORTHON's window, engine, or typology decisions.**
+9. **NEW: If engine_window_overrides specifies a window, PRISM uses it.**
 
 ---
 
@@ -394,3 +491,4 @@ ORTHON's typology or window_recommender, not in PRISM.
 | 2.0 | 2026-02 | 10-dimension typology, per-signal config, output hints, visualizations |
 | 2.2 | 2026-02 | Inclusive engine gating ("if maybe, run it"), nested cohorts |
 | 2.4 | 2026-02 | System window, multi-scale representation (spectral vs trajectory) |
+| 2.5 | 2026-02 | **engine_windows + engine_window_overrides for per-engine minimum samples** |

@@ -4,35 +4,125 @@ This file provides guidance to Claude Code when working with this repository.
 
 ---
 
-## STOP: READ THIS FIRST
+## ⛔ STOP: MANDATORY RULES — READ BEFORE EVERY ACTION
 
-### You are working on PRISM. Not ORTHON.
+### Rule 0: SEARCH BEFORE YOU CREATE
 
-**PRISM computes numbers. ORTHON classifies.**
+**Before writing ANY new code, you MUST search the repo for existing implementations.**
 
-- Do NOT modify any files in the `orthon` repository.
-- Do NOT create typology logic, classification rules, or signal labels in PRISM.
-- Do NOT modify observations.parquet or typology.parquet.
-- Do NOT second-guess manifest.yaml — execute what it says.
-- If you need to understand what ORTHON sends, read `MANIFEST_CONTRACT.md`.
-- If MANIFEST_CONTRACT.md doesn't answer your question, ASK THE USER.
+```bash
+# Find existing files
+find . -name "*.py" | xargs grep -l "function_name"
+
+# Find existing patterns
+grep -r "def compute" prism/engines/
+
+# Find how similar things are done
+grep -r "sample_rate" prism/
+```
+
+**If you think something doesn't exist, ASK THE USER before creating it.**
+
+### Rule 1: USE EXISTING CODE
+
+If a function, engine, or pattern exists in the repo, **USE IT**. Do not recreate.
+
+```
+WRONG: "I'll write a quick FFT function..."
+RIGHT: "I see prism/primitives/spectral.py has psd() — using that."
+
+WRONG: "Let me create a runner to orchestrate this..."
+RIGHT: "I see prism/signal_vector/runner.py handles this — adding to it."
+```
+
+### Rule 2: NO ROGUE FILE CREATION
+
+| Location | Allowed? |
+|----------|----------|
+| `/tmp/` | ❌ NEVER |
+| `~/` | ❌ NEVER |
+| Random standalone scripts | ❌ NEVER |
+| Inside existing repo structure | ✅ With approval |
+
+**If you create something in /tmp, you are hiding evidence. This is forbidden.**
+
+### Rule 3: SHOW YOUR WORK BEFORE CHANGES
+
+Before modifying any file, show:
+1. The existing file/function you're modifying
+2. The existing pattern you're following
+3. Get explicit approval before creating NEW files
+
+```
+WRONG: *silently creates new_runner.py*
+RIGHT: "I found runner.py at prism/signal_vector/runner.py.
+        I'll add the new function there following the existing pattern.
+        Here's the current structure: [shows code]
+        Okay to proceed?"
+```
+
+### Rule 4: PRISM COMPUTES, ORTHON CLASSIFIES
+
+- Do NOT create typology logic, classification rules, or signal labels in PRISM
+- Do NOT modify observations.parquet or typology.parquet
+- Do NOT second-guess manifest.yaml — execute what it says
+- If MANIFEST_CONTRACT.md doesn't answer your question, ASK THE USER
 
 **If you find yourself writing `if signal_type == 'PERIODIC'` in PRISM, STOP.
 That is classification. Classification belongs in ORTHON.**
 
 ---
 
-## DATA COMPLIANCE IS ORTHON'S RESPONSIBILITY
+## 🚫 EXPLICITLY FORBIDDEN BEHAVIORS
 
-**ORTHON delivers data. PRISM computes. The contract is non-negotiable.**
+| Behavior | Why It's Forbidden |
+|----------|-------------------|
+| Create scripts in /tmp | Hides work, not verifiable |
+| Create "one-off" runners | Bypasses established patterns |
+| Inline compute in orchestrators | Engines compute, orchestrators orchestrate |
+| Duplicate existing functionality | Creates inconsistency |
+| Create new venv | Use existing `./venv/` |
+| Guess at implementations | Ask if unsure |
+| Generate code without showing existing | Must show what exists first |
 
-If `observations.parquet` does not comply with PRISM's schema:
+### The /tmp Rule (CRITICAL)
 
-1. **STOP** — Do not proceed
-2. **REJECT** — Return error explaining what's wrong
-3. **DO NOT** adjust PRISM to accommodate bad data
+```
+/tmp is where code goes to avoid accountability.
 
-**Bad data from ORTHON is ORTHON's problem.**
+You will NEVER:
+- Write scripts to /tmp
+- Write data to /tmp
+- Write anything to /tmp
+
+EVERYTHING stays in the repository where it can be reviewed.
+```
+
+### The One-Off Runner Rule (CRITICAL)
+
+```
+WRONG:
+  "I'll create a quick script to do this..."
+  "Let me write a standalone runner..."
+  "Here's a temporary solution..."
+
+RIGHT:
+  "I found the existing runner at [path]. Adding to it."
+  "This matches the pattern in [existing file]. Following that."
+  "The manifest contract says [X]. Implementing exactly that."
+```
+
+---
+
+## ✅ ALLOWED BEHAVIORS
+
+| Behavior | How To Do It |
+|----------|--------------|
+| Call existing engines | `engine_registry[name](window)` |
+| Sequence operations | Chain existing entry points |
+| Pass config from manifest | Read and forward, don't interpret |
+| Add to existing files | Show the file first, get approval |
+| Create new engine | Follow existing engine pattern, propose location first |
 
 ---
 
@@ -60,8 +150,8 @@ manifest.yaml          (from ORTHON)
 │  state_geometry.py = eigenvalues (SHAPE)    │
 │  signal_geometry.py = signal-to-centroid    │
 │  Output: state_vector.parquet               │
-│          state_geometry.parquet              │
-│          signal_geometry.parquet             │
+│          state_geometry.parquet             │
+│          signal_geometry.parquet            │
 └─────────────────────────────────────────────┘
         │
         ▼
@@ -89,81 +179,72 @@ manifest.yaml          (from ORTHON)
 
 ---
 
+## Engine Minimum Sample Requirements
+
+**FFT-based engines require larger windows. This is physics, not a bug.**
+
+| Engine | Minimum Samples | Reason |
+|--------|-----------------|--------|
+| spectral | 64 | FFT resolution |
+| harmonics | 64 | FFT resolution |
+| fundamental_freq | 64 | FFT resolution |
+| thd | 64 | FFT resolution |
+| sample_entropy | 64 | Statistical validity |
+| hurst | 128 | Long-range dependence |
+| crest_factor | 4 | Simple ratio |
+| kurtosis | 4 | 4th moment |
+| skewness | 4 | 3rd moment |
+| perm_entropy | 8 | Permutation patterns |
+| acf_decay | 16 | Lag structure |
+| snr | 32 | Power estimation |
+| phase_coherence | 32 | Phase estimation |
+
+**When system window < engine minimum:**
+- Manifest specifies `engine_window_overrides`
+- PRISM uses expanded window for that engine
+- I (window end index) alignment is preserved
+
+**Do NOT lower engine minimums to fit small windows. The math doesn't work.**
+
+---
+
 ## Directory Structure
 
 ```
 prism/
-├── signal_vector/             # Stage 1: per-signal computation
-│   ├── __init__.py
-│   ├── runner.py              # Orchestrates signal vector creation
-│   ├── signal/                # Per-signal engines (one value per signal per window)
+├── primitives/                # CANONICAL MATH FUNCTIONS
+│   └── individual/
+│       └── spectral.py        # psd, dominant_frequency, etc.
+│
+├── engines/                   # COMPUTE ENGINES (call primitives)
+│   ├── signal/                # Per-signal engines
 │   │   ├── kurtosis.py
-│   │   ├── skewness.py
-│   │   ├── crest_factor.py
-│   │   ├── entropy.py
-│   │   ├── hurst.py
-│   │   ├── spectral.py
+│   │   ├── spectral.py        # Imports from primitives/
 │   │   ├── harmonics.py
-│   │   ├── frequency_bands.py
-│   │   ├── lyapunov.py
-│   │   ├── garch.py
-│   │   ├── attractor.py
-│   │   ├── dmd.py
-│   │   ├── pulsation_index.py
-│   │   ├── rate_of_change.py
-│   │   ├── time_constant.py
-│   │   ├── cycle_counting.py
-│   │   ├── basin.py
-│   │   └── lof.py
+│   │   └── ...
 │   ├── rolling/               # Rolling window engines
-│   │   ├── derivatives.py
-│   │   ├── rolling_kurtosis.py
-│   │   ├── rolling_skewness.py
-│   │   ├── rolling_entropy.py
-│   │   ├── rolling_crest_factor.py
-│   │   ├── rolling_hurst.py
-│   │   ├── rolling_lyapunov.py
-│   │   ├── rolling_volatility.py
-│   │   ├── rolling_pulsation.py
-│   │   ├── manifold.py
-│   │   └── stability.py
 │   └── sql/                   # SQL-based engines
-│       ├── zscore.py
-│       ├── statistics.py
-│       └── correlation.py
 │
-├── state_vector/              # Stage 2: system state + geometry
-│   ├── __init__.py
-│   ├── state_vector.py        # Centroid (WHERE the system is)
-│   ├── state_geometry.py      # Eigenvalues (SHAPE of signal cloud)
-│   └── signal_geometry.py     # Signal-to-centroid distances
+├── signal_vector/             # Stage 1 orchestration
+│   └── runner.py              # USE THIS — don't create new runners
 │
-├── geometry_pairwise/         # Stage 3: signal relationships
-│   ├── __init__.py
-│   ├── signal_pairwise.py     # Pairwise computation orchestrator
-│   ├── granger.py             # Directional: A → B causality
-│   ├── transfer_entropy.py    # Directional: information flow
-│   ├── correlation.py         # Symmetric: linear relationship
-│   ├── mutual_info.py         # Symmetric: nonlinear relationship
-│   └── cointegration.py       # Symmetric: long-run equilibrium
+├── state_vector/              # Stage 2
+├── geometry_pairwise/         # Stage 3
+├── geometry_laplace/          # Stage 4
 │
-├── geometry_laplace/          # Stage 4: dynamics on geometry
-│   ├── __init__.py
-│   ├── geometry_dynamics.py   # Derivatives: velocity, acceleration, jerk
-│   ├── lyapunov_engine.py     # Chaos measurement
-│   ├── dynamics_runner.py     # RQA, attractor reconstruction
-│   └── information_flow_runner.py
-│
-├── db/                        # Database utilities
-├── config/                    # Configuration
 ├── cli.py                     # CLI entry point
-├── sql_runner.py              # SQL execution
 ├── MANIFEST_CONTRACT.md       # What ORTHON delivers (READ THIS)
-│
-└── _legacy/                   # Deprecated, do not use
-    ├── runner.py
-    └── python_runner.py
+└── CLAUDE.md                  # YOU ARE HERE
 ```
+
+### Where New Code Goes
+
+| Type of Code | Location | Pattern to Follow |
+|--------------|----------|-------------------|
+| New signal engine | `prism/engines/signal/` | Copy `kurtosis.py` pattern |
+| New rolling engine | `prism/engines/rolling/` | Copy existing rolling pattern |
+| New primitive | `prism/primitives/individual/` | Pure function, no I/O |
+| New stage | ASK FIRST | Probably doesn't need new stage |
 
 ---
 
@@ -174,8 +255,9 @@ prism/
 Quick reference — for each signal, the manifest tells PRISM:
 - `engines`: which signal-level engines to run
 - `rolling_engines`: which rolling engines to run
-- `window_size`: samples per window
+- `window_size`: samples per window (system default)
 - `stride`: samples between windows
+- `engine_window_overrides`: per-engine window sizes (when different from system)
 - `derivative_depth`: max derivative order (0, 1, or 2)
 - `eigenvalue_budget`: max eigenvalues to compute
 - `output_hints`: how to format engine output (per_bin vs summary, etc.)
@@ -199,110 +281,71 @@ PRISM executes what the manifest says. No more, no less.
 | cohort | str | Grouping key (engine_1, pump_A) - cargo only |
 
 ### I is Canonical
+- Sequential integers per signal_id
+- NOT timestamps
+- Starts at 0, no gaps
+
+### cohort is Cargo
+- ZERO effect on compute
+- Never in groupby
+- Passes through for reporting
+
+---
+
+## Key Rules Summary
+
+1. **SEARCH BEFORE CREATE** — find existing code first
+2. **USE EXISTING PATTERNS** — don't reinvent
+3. **NO /tmp** — everything in repo
+4. **NO ONE-OFF RUNNERS** — use established orchestrators
+5. **PRISM computes, ORTHON classifies** — no labels in PRISM
+6. **state_vector = centroid, state_geometry = eigenvalues** — separate concerns
+7. **Scale-invariant features only** — no absolute values
+8. **I is canonical** — sequential per signal_id
+9. **ASK IF UNSURE** — don't guess
+
+---
+
+## Checklist Before Any Change
+
 ```
-CORRECT:
-signal_id | I | value
-----------|---|------
-temp      | 0 | 45.2
-temp      | 1 | 45.4
-temp      | 2 | 45.6
-
-WRONG (timestamps):
-signal_id | I          | value
-----------|------------|------
-temp      | 1596760568 | 45.2
+□ Did I search for existing implementations?
+□ Am I using existing patterns/files?
+□ Did I show the user what I'm modifying?
+□ Is this going in the repo (not /tmp)?
+□ Am I following MANIFEST_CONTRACT.md?
+□ Did I get approval for new files?
 ```
 
-### unit_id is Cargo
-**unit_id has ZERO effect on compute.**
-- DO NOT include unit_id in groupby operations
-- Group by I or signal_id only
-- unit_id passes through for ORTHON reporting
+**If any answer is NO, stop and fix it.**
 
 ---
 
-## Key Rules
+## Error Handling
 
-1. **PRISM computes, ORTHON classifies** — no labels, no thresholds in PRISM
-2. **Typology lives in ORTHON** — PRISM receives manifest.yaml
-3. **state_vector = centroid, state_geometry = eigenvalues** — separate concerns
-4. **Scale-invariant features only** — no absolute values (deprecated: rms, peak, mean, std)
-5. **I is canonical** — sequential per signal_id, not timestamps
-6. **unit_id is cargo** — never in groupby
-7. **Read MANIFEST_CONTRACT.md** — not ORTHON source code
+**Engines must fail loudly, not silently.**
 
----
+```python
+# WRONG - silent failure
+def compute(y):
+    try:
+        result = complex_math(y)
+    except:
+        pass  # Silent! BAD!
+    return result
 
-## Output Files
+# RIGHT - loud failure
+def compute(y):
+    if len(y) < MIN_SAMPLES:
+        raise ValueError(f"Need {MIN_SAMPLES} samples, got {len(y)}")
+    return complex_math(y)
+```
 
-### From PRISM
-| File | Stage | Description |
-|------|-------|-------------|
-| signal_vector.parquet | 1 | Per-signal features |
-| state_vector.parquet | 2 | Centroids (position) |
-| state_geometry.parquet | 2 | Eigenvalues (shape) |
-| signal_geometry.parquet | 2 | Signal-to-centroid |
-| signal_pairwise.parquet | 3 | Pairwise relationships |
-| geometry_dynamics.parquet | 4 | State derivatives |
-| signal_dynamics.parquet | 4 | Signal derivatives |
-| pairwise_dynamics.parquet | 4 | Pairwise derivatives |
-| lyapunov.parquet | 4 | Lyapunov exponents |
-| dynamics.parquet | 4 | RQA, attractor |
-| information_flow.parquet | 4 | Transfer entropy |
-| zscore.parquet | SQL | Normalized |
-| statistics.parquet | SQL | Summary stats |
-| correlation.parquet | SQL | Correlation matrix |
+If an engine can't run (insufficient samples, bad data), it should:
+1. Raise an exception, OR
+2. Return explicit NaN with logged warning
 
----
-
-## Key Separation: state_vector vs state_geometry
-
-| File | Computes | Contains |
-|------|----------|----------|
-| state_vector.py | Centroid (mean) | centroid_*, mean_distance |
-| state_geometry.py | SVD on features | eigenvalue_*, effective_dim |
-
-**Eigenvalues ONLY in state_geometry.py. Never in state_vector.py.**
-
----
-
-## Do NOT
-
-- Put classification logic in PRISM
-- Modify ORTHON code or repository
-- Compute eigenvalues in state_vector (they belong in state_geometry)
-- Use deprecated scale-dependent engines (rms, peak, mean, std)
-- Include unit_id in groupby operations
-- Create typology in PRISM (ORTHON's job)
-- Second-guess the manifest's engine selections or window sizes
-- Write `if signal_type == ...` anywhere in PRISM
-
----
-
-## Claude Code Behaviors
-
-| Behavior | Allowed |
-|----------|---------|
-| Call existing engines | YES |
-| Sequence operations | YES |
-| Pass config from manifest | YES |
-| Generate new runners/scripts | NO |
-| Inline compute logic | NO |
-| Write to /tmp | NO |
-| Create files outside repo | NO |
-| Create new venv | NO |
-
-**Explanation:**
-- **Call existing engines**: Use `engine_registry[name](window)` to invoke engines
-- **Sequence operations**: Chain entry points, concat DataFrames, etc.
-- **Pass config**: Read window_size, stride, engines from manifest
-- **Generate new runners**: Do NOT create standalone scripts — use existing entry points
-- **Inline compute**: Do NOT add calculations to entry points — put them in engines
-- **Write to /tmp**: NEVER use /tmp — everything must be verifiable in the repo
-- **Create files outside repo**: All work stays in the repository
-- **Create new venv**: NEVER create a new venv — use the existing `./venv/`
-
-If a manifest requests an engine that doesn't exist, **reject** — do not implement inline.
+Never silently return garbage.
 
 ---
 
