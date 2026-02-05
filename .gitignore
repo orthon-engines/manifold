@@ -107,3 +107,12 @@ reports/output/
 
 # Legacy/archived docs
 _legacy/
+
+# =============================================================================
+# AI / CLAUDE
+# =============================================================================
+CLAUDE.md
+CLAUDE_MEMORY.md
+docs/
+full_manifest.json
+MANIFEST_CONTRACT.md
