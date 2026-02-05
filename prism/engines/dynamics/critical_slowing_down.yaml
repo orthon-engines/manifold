@@ -1,0 +1,103 @@
+# Critical Slowing Down Engine Configuration
+#
+# Detects early warning signals of approaching bifurcation (B-tipping).
+# Based on Scheffer (2009) "Critical Transitions in Nature and Society"
+#
+# Near a tipping point:
+#   - Autocorrelation increases (memory grows)
+#   - Variance increases (fluctuations grow)
+#   - Recovery rate decreases (system sluggish)
+#
+# IMPORTANT: Only applies to B-tipping!
+# R-tipping may show NO early warning.
+
+name: critical_slowing_down
+version: "1.0.0"
+description: "Early warning signals for critical transitions (B-tipping)"
+
+# Aliases
+aliases:
+  - csd
+  - early_warning
+  - tipping_warning
+
+# Engine requirements
+requirements:
+  min_window: 100       # Need sufficient data for trends
+  optimal_window: 500   # Better trend estimation
+  max_window: 2000
+
+  window_factors:
+    PERIODIC: 2.0       # Need multiple cycles
+    QUASI_PERIODIC: 2.0
+    TRENDING: 1.5       # Detrend first
+    CHAOTIC: 1.0        # May not apply (already unstable)
+    RANDOM: 1.0
+    STATIONARY: 1.0
+    CONSTANT: 0         # Cannot compute
+
+# Output columns
+outputs:
+  - autocorrelation_lag1    # AR(1) coefficient
+  - variance                # Current variance
+  - skewness               # Asymmetry indicator
+  - recovery_rate          # -ln(ρ), rate of return to equilibrium
+  - autocorr_trend         # Slope of rolling autocorrelation
+  - variance_trend         # Slope of rolling variance
+  - variance_ratio         # Current/baseline variance
+  - csd_score              # Composite 0-1 score
+  - csd_detected           # Boolean detection flag
+
+# Default parameters
+parameters:
+  window_size: 50         # Rolling window for local stats
+  step: 10                # Step size
+  detrend: true           # Remove linear trend first
+
+# Interpretation
+interpretation:
+  autocorrelation_lag1:
+    low: "< 0.3: Fast recovery, far from tipping"
+    medium: "0.3-0.7: Moderate memory"
+    high: "> 0.7: Slow recovery, approaching tipping"
+
+  csd_score:
+    low: "< 0.3: No signs of critical slowing down"
+    medium: "0.3-0.6: Some warning signs present"
+    high: "> 0.6: Strong evidence of approaching tipping"
+
+  csd_detected:
+    true: "WARNING: Multiple CSD indicators positive"
+    false: "No critical slowing down detected"
+
+# Domain applicability
+domains:
+  - markets         # Pre-crash dynamics
+  - ecology         # Ecosystem collapse
+  - climate         # Climate tipping points
+  - biological      # Physiological transitions
+  - mechanical      # Structural failure approach
+
+# Tags
+tags:
+  - early_warning
+  - bifurcation
+  - tipping_point
+  - critical_transition
+  - b_tipping
+  - stability
+
+# Caveats
+caveats:
+  - "Only detects B-tipping (bifurcation-induced)"
+  - "R-tipping may have NO early warning"
+  - "Requires sufficient pre-transition data"
+  - "Works best for fold (saddle-node) bifurcations"
+  - "May give false positives in non-stationary data"
+
+# References
+references:
+  - "Scheffer (2009) Critical Transitions in Nature and Society"
+  - "Scheffer et al. (2009) Nature 461:53-59"
+  - "Dakos et al. (2012) Methods in Ecology and Evolution"
+  - "Carpenter & Brock (2006) Ecology Letters"

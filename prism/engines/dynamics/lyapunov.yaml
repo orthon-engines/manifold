@@ -1,0 +1,86 @@
+# Lyapunov Exponent Engine Configuration
+#
+# Computes largest Lyapunov exponent for stability analysis.
+# This is the formal measure of dynamical stability:
+#   λ < 0  →  Stable (trajectories converge)
+#   λ ≈ 0  →  Marginally stable / periodic
+#   λ > 0  →  Unstable / chaotic (trajectories diverge)
+#
+# Key for B-tipping detection:
+#   - λ approaching 0 from below = critical slowing down
+#   - λ crossing 0 = bifurcation point
+#
+# Algorithm: Rosenstein et al. (1993)
+
+name: lyapunov
+version: "1.0.0"
+description: "Largest Lyapunov exponent for stability and chaos detection"
+
+# Engine requirements
+requirements:
+  min_window: 50        # Minimum samples for reliable estimation
+  optimal_window: 200   # Optimal for Rosenstein algorithm
+  max_window: 1000      # Beyond this, computational cost increases
+
+  # Window multipliers by signal type
+  window_factors:
+    PERIODIC: 2.0       # Need multiple cycles
+    QUASI_PERIODIC: 2.0
+    TRENDING: 1.0       # Trend doesn't affect much
+    CHAOTIC: 1.5        # More data helps chaos detection
+    RANDOM: 1.0
+    STATIONARY: 1.0
+    CONSTANT: 0         # Cannot compute (no dynamics)
+
+# Output columns
+outputs:
+  - lyapunov_exp          # Largest Lyapunov exponent (λ)
+  - stability             # Classification: stable/marginal/unstable/chaotic
+  - divergence_rate       # exp(λ) - rate trajectories separate
+  - predictability_horizon # ln(2)/λ - time until error doubles
+  - r_squared             # Fit quality of λ estimation
+
+# Default parameters
+parameters:
+  embedding_dim: 3        # Phase space dimension (m)
+  time_delay: null        # Auto-estimate from ACF if null
+  min_neighbors: 10       # Minimum neighbors for divergence
+  theiler_window: null    # Auto-set to 2*time_delay if null
+
+# Interpretation guidance
+interpretation:
+  lyapunov_exp:
+    negative: "System is stable - perturbations decay"
+    near_zero: "System is marginally stable or periodic"
+    positive_small: "System is weakly unstable - slow divergence"
+    positive_large: "System is chaotic - rapid divergence"
+
+  stability:
+    asymptotically_stable: "λ < -0.1: Strong convergence to attractor"
+    stable: "-0.1 < λ < -0.01: Slow convergence"
+    marginally_stable: "-0.01 < λ < 0.01: Periodic or near-critical"
+    weakly_unstable: "0.01 < λ < 0.1: Slow divergence"
+    chaotic: "λ > 0.1: Chaotic dynamics"
+
+# Domain applicability
+domains:
+  - markets         # Stability of price dynamics
+  - mechanical      # Vibration stability
+  - electrical      # Signal stability
+  - biological      # Physiological stability
+  - climate         # Climate system stability
+
+# Tags for categorization
+tags:
+  - stability
+  - chaos
+  - dynamical_systems
+  - bifurcation
+  - critical_transition
+  - b_tipping
+
+# References
+references:
+  - "Rosenstein et al. (1993) Physica D 65:117-134"
+  - "Strogatz (2015) Nonlinear Dynamics and Chaos"
+  - "Wolf et al. (1985) Physica D 16:285-317"

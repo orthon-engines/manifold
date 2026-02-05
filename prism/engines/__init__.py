@@ -45,9 +45,22 @@ from prism.engines import dynamics
 # Rolling wrapper
 from prism.engines.rolling import compute as rolling_compute
 
+# Normalization engine
+from prism.engines.normalization import (
+    normalize,
+    compute_zscore,
+    compute_robust,
+    compute_mad,
+    compute_minmax,
+    recommend_method,
+    inverse_normalize,
+    NormMethod,
+)
+
 # Legacy flat files (for backwards compatibility)
-from prism.engines.state_vector import compute_state_vector, compute_centroid
-from prism.engines.state_geometry import compute_state_geometry, compute_eigenvalues
+# Note: state_vector and state_geometry moved to entry_points
+from prism.entry_points.state_vector import compute_state_vector, compute_centroid
+from prism.entry_points.state_geometry import compute_state_geometry, compute_eigenvalues
 from prism.engines.signal_geometry import compute_signal_geometry
 from prism.engines.signal_pairwise import compute_signal_pairwise
 from prism.engines.geometry_dynamics import (
@@ -72,6 +85,15 @@ __all__ = [
     'dynamics',
     # Rolling
     'rolling_compute',
+    # Normalization
+    'normalize',
+    'compute_zscore',
+    'compute_robust',
+    'compute_mad',
+    'compute_minmax',
+    'recommend_method',
+    'inverse_normalize',
+    'NormMethod',
     # Legacy flat files
     'compute_state_vector',
     'compute_centroid',

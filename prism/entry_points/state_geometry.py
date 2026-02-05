@@ -17,13 +17,22 @@ Python first (SVD for eigenvalues), then SQL for aggregations.
 
 Pipeline:
     signal_vector.parquet + state_vector.parquet → state_geometry.parquet
+
+Normalization Options (v2.5):
+- zscore: Standard (x-mean)/std - sensitive to outliers (default for backward compat)
+- robust: (x-median)/IQR - moderate robustness to outliers
+- mad: (x-median)/MAD - most robust, recommended for industrial/financial data
+- none: Raw covariance (preserves actual variance dynamics)
 """
 
 import numpy as np
 import polars as pl
 import duckdb
 from pathlib import Path
-from typing import List, Dict, Optional, Any, Tuple
+from typing import List, Dict, Optional, Any, Tuple, Literal
+
+# Import normalization engine
+from prism.engines.normalization import normalize, recommend_method, NormMethod
 
 
 # ============================================================
@@ -49,7 +58,7 @@ def compute_eigenvalues(
     signal_matrix: np.ndarray,
     centroid: np.ndarray,
     min_signals: int = 3,
-    normalize: bool = True
+    norm_method: str = "zscore"
 ) -> Dict[str, Any]:
     """
     Compute eigenvalues of signal distribution around centroid.
@@ -59,15 +68,18 @@ def compute_eigenvalues(
 
     Steps:
         1. Center signals around centroid
-        2. Z-score normalize (optional, so features are comparable)
+        2. Normalize (optional, so features are comparable)
         3. SVD to get eigenvalues
 
     Args:
         signal_matrix: N_signals × D_features
         centroid: D_features centroid from state_vector
         min_signals: Minimum signals for reliable eigenvalues
-        normalize: If True (default), Z-score normalize before SVD.
-                   If False, use raw covariance (preserves actual variance dynamics)
+        norm_method: Normalization method (see prism.engines.normalization):
+            - "zscore": Standard z-score (sensitive to outliers)
+            - "robust": IQR-based (moderate robustness)
+            - "mad": MAD-based (most robust, recommended for industrial data)
+            - "none": Raw covariance (preserves actual variance dynamics)
 
     Returns:
         Eigenvalue metrics
@@ -91,18 +103,21 @@ def compute_eigenvalues(
     centered = signal_matrix - centroid
 
     # ─────────────────────────────────────────────────
-    # Z-SCORE NORMALIZE BEFORE SVD (optional)
-    # Without this, features with large variance dominate
-    # eigenvalues, making them incomparable across time.
-    # With normalize=False, raw covariance eigenvalues preserve
-    # actual variance dynamics (useful for detecting physical changes).
+    # NORMALIZE BEFORE SVD (configurable method)
+    # Without normalization, features with large variance
+    # dominate eigenvalues, making them incomparable across time.
+    #
+    # Method selection guidance:
+    # - zscore: Default, assumes Gaussian, sensitive to outliers
+    # - robust: IQR-based, handles moderate outliers
+    # - mad: MAD-based, most robust for industrial/financial data
+    # - none: Raw covariance (preserves actual variance dynamics)
     # ─────────────────────────────────────────────────
-    if normalize:
-        std = np.std(centered, axis=0, keepdims=True)
-        std = np.where(std < 1e-10, 1.0, std)  # Avoid div by zero
-        normalized = centered / std
-    else:
+    if norm_method.lower() == "none":
         normalized = centered
+    else:
+        # Use normalization engine
+        normalized, _ = normalize(centered, method=norm_method, axis=0)
 
     # ─────────────────────────────────────────────────
     # SVD FOR EIGENVALUES
@@ -215,6 +230,7 @@ def compute_state_geometry(
     output_path: str = "state_geometry.parquet",
     feature_groups: Optional[Dict[str, List[str]]] = None,
     max_eigenvalues: int = 5,
+    norm_method: str = "zscore",
     verbose: bool = True
 ) -> pl.DataFrame:
     """
@@ -226,6 +242,11 @@ def compute_state_geometry(
         output_path: Output path
         feature_groups: Dict mapping engine names to feature lists
         max_eigenvalues: Maximum eigenvalues to store
+        norm_method: Normalization method before SVD:
+            - "zscore": Standard (sensitive to outliers) - default
+            - "robust": IQR-based (moderate robustness)
+            - "mad": MAD-based (most robust for industrial data)
+            - "none": Raw covariance (preserves variance dynamics)
         verbose: Print progress
 
     Returns:
@@ -235,6 +256,7 @@ def compute_state_geometry(
         print("=" * 70)
         print("STATE GEOMETRY ENGINE")
         print("Eigenvalues and shape metrics per engine")
+        print(f"Normalization: {norm_method}")
         print("=" * 70)
 
     # Load data
@@ -260,22 +282,40 @@ def compute_state_geometry(
         print(f"Feature groups: {list(feature_groups.keys())}")
         print()
 
-    # Process each I (unit_id is cargo, not a compute key)
-    results = []
-    groups = signal_vector.group_by(['I'], maintain_order=True)
-    n_groups = signal_vector.select(['I']).unique().height
+    # Determine grouping columns - include cohort if present for per-unit analysis
+    has_cohort = 'cohort' in signal_vector.columns
+    group_cols = ['cohort', 'I'] if has_cohort else ['I']
 
-    # Track previous PC1 loadings for alignment computation
-    prev_pc1_by_engine: Dict[str, np.ndarray] = {}
+    # Process each group (cohort, I) or just (I)
+    results = []
+    groups = signal_vector.group_by(group_cols, maintain_order=True)
+    n_groups = signal_vector.select(group_cols).unique().height
+
+    # Track previous PC1 loadings for alignment computation (per cohort if available)
+    # Key: (cohort, engine) or just engine if no cohort
+    prev_pc1_by_key: Dict[Any, np.ndarray] = {}
 
     if verbose:
-        print(f"Processing {n_groups} time points...")
+        if has_cohort:
+            n_cohorts = signal_vector['cohort'].n_unique()
+            print(f"Processing {n_groups} (cohort, I) groups across {n_cohorts} cohorts...")
+        else:
+            print(f"Processing {n_groups} time points...")
 
-    for i, (I_tuple, group) in enumerate(groups):
-        I = I_tuple[0] if isinstance(I_tuple, tuple) else I_tuple
+    for i, (group_key, group) in enumerate(groups):
+        if has_cohort:
+            cohort, I = group_key if isinstance(group_key, tuple) else (group_key, None)
+        else:
+            cohort = None
+            I = group_key[0] if isinstance(group_key, tuple) else group_key
 
-        # Get state vector for this I
-        state_row = state_vector.filter(pl.col('I') == I)
+        # Get state vector for this (cohort, I) or just I
+        if has_cohort and 'cohort' in state_vector.columns:
+            state_row = state_vector.filter(
+                (pl.col('I') == I) & (pl.col('cohort') == cohort)
+            )
+        else:
+            state_row = state_vector.filter(pl.col('I') == I)
 
         if len(state_row) == 0:
             continue
@@ -304,18 +344,22 @@ def compute_state_geometry(
             # Get signal matrix
             matrix = group.select(available).to_numpy()
 
-            # Compute eigenvalues
-            eigen_result = compute_eigenvalues(matrix, centroid)
+            # Compute eigenvalues with specified normalization
+            eigen_result = compute_eigenvalues(matrix, centroid, norm_method=norm_method)
 
-            # Build result row (unit_id from group if present, else blank)
+            # Build result row
             unit_id = group['unit_id'][0] if 'unit_id' in group.columns else ''
             row = {
-                'unit_id': unit_id,
                 'I': I,
                 'engine': engine_name,
                 'n_signals': eigen_result['n_signals'],
                 'n_features': eigen_result['n_features'],
             }
+            # Include cohort if available (for per-unit analysis)
+            if cohort:
+                row['cohort'] = cohort
+            if unit_id:
+                row['unit_id'] = unit_id
 
             # Eigenvalues
             for j in range(min(max_eigenvalues, len(eigen_result['eigenvalues']))):
@@ -349,12 +393,20 @@ def compute_state_geometry(
 
             # PC1 ALIGNMENT with previous window (regime detection)
             # Correlation of current PC1 loadings with previous window's PC1
-            if pc1 is not None and engine_name in prev_pc1_by_engine:
-                prev_pc1 = prev_pc1_by_engine[engine_name]
+            # Use (cohort, engine) key to track per-unit alignment when cohort exists
+            pc1_key = (cohort, engine_name) if cohort else engine_name
+
+            if pc1 is not None and pc1_key in prev_pc1_by_key:
+                prev_pc1 = prev_pc1_by_key[pc1_key]
                 if len(pc1) == len(prev_pc1) and len(pc1) > 1:
-                    # Absolute correlation (sign can flip between windows)
-                    alignment = abs(np.corrcoef(pc1, prev_pc1)[0, 1])
-                    row['pc1_alignment'] = float(alignment) if np.isfinite(alignment) else np.nan
+                    # Safeguard against degenerate cases (constant PC1)
+                    if np.std(pc1) > 1e-10 and np.std(prev_pc1) > 1e-10:
+                        # Absolute correlation (sign can flip between windows)
+                        alignment = abs(np.corrcoef(pc1, prev_pc1)[0, 1])
+                        row['pc1_alignment'] = float(alignment) if np.isfinite(alignment) else 1.0
+                    else:
+                        # Constant PC = no rotation (same as previous)
+                        row['pc1_alignment'] = 1.0
                 else:
                     row['pc1_alignment'] = np.nan
             else:
@@ -362,7 +414,7 @@ def compute_state_geometry(
 
             # Store current PC1 for next iteration
             if pc1 is not None:
-                prev_pc1_by_engine[engine_name] = pc1.copy()
+                prev_pc1_by_key[pc1_key] = pc1.copy()
 
             # PC1 loadings on SIGNALS (first column of U)
             # This tells us how much each signal contributes to PC1
@@ -521,37 +573,52 @@ def run_sql_aggregations(
 # ============================================================
 
 def main():
-    import sys
+    """Safe CLI for state_geometry."""
+    from prism.cli import SafeCLI
 
-    usage = """
+    cli = SafeCLI(
+        description="""
 State Geometry Engine - Eigenvalues and shape metrics
 
-Usage:
-    python state_geometry.py <signal_vector.parquet> <state_vector.parquet> [output.parquet]
-    python state_geometry.py --aggregate <state_geometry.parquet> [output_dir]
-
 Computes per engine, per index:
-- Eigenvalues (via SVD)
-- effective_dim (from eigenvalues)
-- Total variance, condition number
-- Eigenvalue entropy
+  - Eigenvalues (via SVD)
+  - effective_dim (from eigenvalues)
+  - Total variance, condition number
+  - Eigenvalue entropy
 
 This is the SHAPE of signal distribution around each state.
+
+Normalization methods (--norm):
+  zscore  - Standard (x-mean)/std - sensitive to outliers (default)
+  robust  - (x-median)/IQR - moderate robustness
+  mad     - (x-median)/MAD - most robust (recommended for industrial)
+  none    - Raw covariance (preserves variance dynamics)
+
+Examples:
+  python state_geometry.py -s signal_vector.parquet -t state_vector.parquet
+  python state_geometry.py -s signal_vector.parquet -t state_vector.parquet --norm mad
+  python state_geometry.py -s signal_vector.parquet -t state_vector.parquet -o output.parquet
 """
+    )
+    cli.add_input('signal_vector', '-s', help='Path to signal_vector.parquet')
+    cli.add_input('state_vector', '-t', help='Path to state_vector.parquet')
+    cli.add_output('output', default='state_geometry.parquet')
+    cli.parser.add_argument(
+        '--norm', '-n',
+        choices=['zscore', 'robust', 'mad', 'none'],
+        default='zscore',
+        help='Normalization method before SVD (default: zscore)'
+    )
 
-    if len(sys.argv) < 3:
-        print(usage)
-        sys.exit(1)
+    args = cli.parse()
 
-    if sys.argv[1] == '--aggregate':
-        state_geometry_path = sys.argv[2]
-        output_dir = sys.argv[3] if len(sys.argv) > 3 else "."
-        run_sql_aggregations(state_geometry_path, output_dir)
-    else:
-        signal_path = sys.argv[1]
-        state_path = sys.argv[2]
-        output_path = sys.argv[3] if len(sys.argv) > 3 else "state_geometry.parquet"
-        compute_state_geometry(signal_path, state_path, output_path)
+    compute_state_geometry(
+        args.signal_vector,
+        args.state_vector,
+        args.output,
+        norm_method=args.norm,
+        verbose=args.verbose
+    )
 
 
 if __name__ == "__main__":
