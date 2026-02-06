@@ -107,6 +107,7 @@ reports/output/
 
 # Legacy/archived docs
 _legacy/
+_deprecated/
 
 # =============================================================================
 # AI / CLAUDE
