@@ -298,8 +298,12 @@ async def create_atlas(
 
     kd["runs"] = kd.get("runs", 0) + 1
 
-    # Zip parquets
-    shutil.make_archive(str(job_dir / "atlas"), "zip", str(job_dir))
+    # Zip parquets only (exclude upload.csv)
+    import zipfile
+    zip_path = job_dir / "atlas.zip"
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in job_dir.glob("*.parquet"):
+            zf.write(f, f.name)
 
     # Cleanup later
     background_tasks.add_task(cleanup_job, job_dir)

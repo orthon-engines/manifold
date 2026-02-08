@@ -178,7 +178,7 @@
     border-color: var(--blue);
     background: rgba(68, 147, 248, 0.02);
   }
-  .dropzone input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+  .dropzone input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; z-index: 2; }
   .dropzone .icon { font-size: 24px; color: var(--faint); margin-bottom: 8px; }
   .dropzone .main { font-size: 14px; color: var(--dim); }
   .dropzone .sub { font-size: 11px; color: var(--faint); font-family: var(--mono); margin-top: 4px; }
@@ -227,6 +227,17 @@
     border-bottom: 1px solid var(--border);
   }
   .files li:last-child { border: none; }
+  .files li.done { color: var(--text); }
+  .files li.pending { color: var(--faint); }
+  .files .status {
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-family: var(--mono);
+    letter-spacing: 0.05em;
+  }
+  .files .status.done { background: var(--green-bg); color: var(--green); border: 1px solid rgba(63,185,80,0.2); }
+  .files .status.pending { background: var(--surface2); color: var(--faint); border: 1px solid var(--border); }
   .files a { color: var(--blue); text-decoration: none; font-size: 11px; }
   .files a:hover { text-decoration: underline; }
 
@@ -245,25 +256,6 @@
   }
   .dlall:hover { background: var(--green); color: #fff; }
 
-  /* ── Pricing ── */
-  .tiers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-  .tier {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 18px;
-    text-align: center;
-  }
-  .tier .name {
-    font-family: var(--mono);
-    font-size: 10px;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    margin-bottom: 6px;
-  }
-  .tier .price { font-size: 24px; font-weight: 600; }
-  .tier .price span { font-size: 12px; color: var(--dim); }
-  .tier .info { font-size: 11px; color: var(--dim); margin-top: 6px; line-height: 1.6; }
 
   /* ── Footer ── */
   .foot {
@@ -278,7 +270,7 @@
   }
 
   @media (max-width: 600px) {
-    .stats, .tiers { grid-template-columns: 1fr; }
+    .stats { grid-template-columns: 1fr; }
     .row { flex-direction: column; }
   }
 </style>
@@ -381,25 +373,13 @@
     </div>
   </div>
 
-  <!-- ── Pricing ── -->
+  <!-- ── Access ── -->
   <div class="sec">
     <div class="sec-head">access</div>
-    <div class="tiers">
-      <div class="tier">
-        <div class="name" style="color:var(--green)">academic</div>
-        <div class="price">free</div>
-        <div class="info">.edu email<br>unlimited<br>citation required</div>
-      </div>
-      <div class="tier">
-        <div class="name" style="color:var(--blue)">pro</div>
-        <div class="price">$99<span>/mo</span></div>
-        <div class="info">unlimited<br>priority<br>API access</div>
-      </div>
-      <div class="tier">
-        <div class="name" style="color:var(--amber)">enterprise</div>
-        <div class="price">custom</div>
-        <div class="info">streaming<br>fleet monitoring<br>dedicated support</div>
-      </div>
+    <div class="card" style="text-align:center;padding:24px">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--green);margin-bottom:6px">academic</div>
+      <div style="font-size:24px;font-weight:600">free</div>
+      <div style="font-size:11px;color:var(--dim);margin-top:6px;line-height:1.6">.edu email &middot; unlimited &middot; citation required</div>
     </div>
   </div>
 
@@ -435,8 +415,9 @@ function msg(id, txt, type) {
 }
 
 function clearMsg(id) {
-  document.getElementById(id).className = 'msg';
-  document.getElementById(id).style.display = 'none';
+  const el = document.getElementById(id);
+  el.className = 'msg';
+  el.textContent = '';
 }
 
 async function sendCode() {
@@ -496,6 +477,82 @@ function reset() {
   show('s1');
 }
 
+// Full pipeline file list (order = pipeline stage order)
+const PIPELINE_FILES = [
+  { name: 'observations.parquet', stage: '00', label: 'observations' },
+  { name: 'breaks.parquet', stage: '00', label: 'break detection' },
+  { name: 'signal_vector.parquet', stage: '01', label: 'signal features' },
+  { name: 'state_vector.parquet', stage: '02', label: 'state centroids' },
+  { name: 'state_geometry.parquet', stage: '03', label: 'eigendecomposition' },
+  { name: 'cohorts.parquet', stage: '04', label: 'cohort grouping' },
+  { name: 'signal_geometry.parquet', stage: '05', label: 'signal geometry' },
+  { name: 'signal_pairwise.parquet', stage: '06', label: 'pairwise relations' },
+  { name: 'geometry_dynamics.parquet', stage: '07', label: 'geometry dynamics' },
+  { name: 'ftle.parquet', stage: '08', label: 'FTLE' },
+  { name: 'dynamics.parquet', stage: '09', label: 'attractor metrics' },
+  { name: 'information_flow.parquet', stage: '10', label: 'information flow' },
+  { name: 'topology.parquet', stage: '11', label: 'topology' },
+  { name: 'zscore.parquet', stage: '12', label: 'z-scores' },
+  { name: 'statistics.parquet', stage: '13', label: 'statistics' },
+  { name: 'correlation.parquet', stage: '14', label: 'correlation' },
+];
+
+function renderFileList(generatedFiles, fileUrls, downloadUrl) {
+  const fl = document.getElementById('flist');
+  fl.innerHTML = '';
+
+  const generated = new Set(generatedFiles);
+
+  for (const pf of PIPELINE_FILES) {
+    const li = document.createElement('li');
+    const isDone = generated.has(pf.name);
+    li.className = isDone ? 'done' : 'pending';
+
+    const left = document.createElement('span');
+    left.textContent = pf.name;
+    li.appendChild(left);
+
+    if (isDone && fileUrls[pf.name]) {
+      const a = document.createElement('a');
+      a.href = fileUrls[pf.name];
+      a.download = '';
+      a.textContent = 'download';
+      li.appendChild(a);
+    } else {
+      const badge = document.createElement('span');
+      badge.className = 'status ' + (isDone ? 'done' : 'pending');
+      badge.textContent = isDone ? 'done' : 'pending';
+      li.appendChild(badge);
+    }
+
+    fl.appendChild(li);
+  }
+
+  // Any extra files not in PIPELINE_FILES
+  for (const name of generatedFiles) {
+    if (!PIPELINE_FILES.find(p => p.name === name)) {
+      const li = document.createElement('li');
+      li.className = 'done';
+      li.innerHTML = '<span>' + name + '</span>';
+      if (fileUrls[name]) {
+        const a = document.createElement('a');
+        a.href = fileUrls[name];
+        a.download = '';
+        a.textContent = 'download';
+        li.appendChild(a);
+      } else {
+        const badge = document.createElement('span');
+        badge.className = 'status done';
+        badge.textContent = 'done';
+        li.appendChild(badge);
+      }
+      fl.appendChild(li);
+    }
+  }
+
+  document.getElementById('dllink').href = downloadUrl;
+}
+
 async function upload(file) {
   if (!file) return;
   if (!apiKey) { msg('umsg', 'register first', 'err'); return; }
@@ -528,16 +585,12 @@ async function upload(file) {
       document.getElementById('nSamp').textContent = d.summary.n_samples.toLocaleString();
       document.getElementById('nFile').textContent = d.summary.files_generated;
 
-      const fl = document.getElementById('flist');
-      fl.innerHTML = '';
-      for (const [name, url] of Object.entries(d.files)) {
-        const li = document.createElement('li');
-        li.innerHTML = '<span>' + name + '</span><a href="' + url + '" download>download</a>';
-        fl.appendChild(li);
-      }
-
-      document.getElementById('dllink').href = d.download;
+      renderFileList(d.summary.files, d.files, d.download);
       res.style.display = 'block';
+    } else if (r.status === 401) {
+      prog.style.display = 'none';
+      reset();
+      msg('umsg', 'session expired — register again', 'err');
     } else {
       prog.style.display = 'none';
       msg('umsg', d.detail || 'pipeline error', 'err');

@@ -37,6 +37,7 @@ pydantic_core==2.41.5
 Pygments==2.19.2
 pyparsing==3.3.2
 PySocks==1.7.1
+python-multipart==0.0.22
 pytest==9.0.2
 python-dateutil==2.9.0.post0
 PyWavelets==1.9.0
