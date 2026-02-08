@@ -356,10 +356,32 @@ def _cao_dimension(
     max_dim: int,
     threshold: float
 ) -> int:
-    """Cao's method for optimal dimension."""
+    """Cao's method for optimal dimension (returns dimension only)."""
+    result = cao_embedding_analysis(signal, delay, max_dim, threshold)
+    return result['dimension']
+
+
+def cao_embedding_analysis(
+    signal: np.ndarray,
+    delay: int,
+    max_dim: int = 10,
+    threshold: float = 0.01,
+) -> dict:
+    """
+    Full Cao's method: embedding dimension + determinism test.
+
+    Returns:
+        dict with:
+            dimension: optimal embedding dimension
+            E1_values: E1(d) ratios (dimension saturates where E1 -> 1)
+            E2_values: E2(d) ratios (determinism: E2 != 1 for some d -> deterministic)
+            is_deterministic: bool — whether E2 deviates from 1
+            E1_saturation_dim: dimension where E1 first saturates
+    """
     from scipy.spatial import KDTree
 
-    e_values = []
+    e_values = []   # E(d) = mean of a(i,d) ratios
+    e2_raw = []     # E*(d) = mean of |x(i+(d-1)τ) - x(nn(i)+(d-1)τ)|
 
     for dim in range(1, max_dim + 1):
         emb = time_delay_embedding(signal, dim, delay)
@@ -380,9 +402,10 @@ def _cao_dimension(
         tree = KDTree(emb_prev)
 
         a_values = []
+        e2_diffs = []
 
-        for i in range(min(500, n_points)):
-            # Nearest neighbor in lower dimension
+        n_check = min(500, n_points)
+        for i in range(n_check):
             dists, indices = tree.query(emb_prev[i], k=2)
 
             if len(indices) < 2:
@@ -394,24 +417,67 @@ def _cao_dimension(
             if r_d < 1e-10:
                 continue
 
-            # Distance in current dimension
+            # E1: distance ratio between dimensions
             r_d1 = np.linalg.norm(emb[i] - emb[j])
-
             a_values.append(r_d1 / r_d)
+
+            # E2: |x(i+(d-1)τ) - x(j+(d-1)τ)| — the extra coordinate distance
+            extra_idx_i = i + (dim - 1) * delay
+            extra_idx_j = j + (dim - 1) * delay
+            if extra_idx_i < len(signal) and extra_idx_j < len(signal):
+                e2_diffs.append(abs(signal[extra_idx_i] - signal[extra_idx_j]))
 
         if a_values:
             e_values.append(np.mean(a_values))
+        if e2_diffs:
+            e2_raw.append(np.mean(e2_diffs))
 
-    # E1(d) = E(d+1) / E(d)
+    # E1(d) = E(d+1) / E(d) — dimension saturation
     if len(e_values) < 2:
-        return 2
+        return {
+            'dimension': 2,
+            'E1_values': [],
+            'E2_values': [],
+            'is_deterministic': None,
+            'E1_saturation_dim': 2,
+        }
 
-    e1_values = [e_values[i + 1] / e_values[i] if e_values[i] > 0 else 1
-                 for i in range(len(e_values) - 1)]
+    e1_values = [
+        e_values[i + 1] / e_values[i] if e_values[i] > 0 else 1.0
+        for i in range(len(e_values) - 1)
+    ]
 
-    # Find where E1 stabilizes near 1
+    # E2(d) = E*(d+1) / E*(d) — determinism test
+    e2_values = []
+    if len(e2_raw) >= 2:
+        e2_values = [
+            e2_raw[i + 1] / e2_raw[i] if e2_raw[i] > 0 else 1.0
+            for i in range(len(e2_raw) - 1)
+        ]
+
+    # Find saturation dimension (E1 -> 1)
+    dim_result = max_dim
+    saturation_dim = max_dim
     for d, e1 in enumerate(e1_values, 1):
         if abs(e1 - 1) < threshold:
-            return d + 1
+            dim_result = d + 1
+            saturation_dim = d + 1
+            break
 
-    return max_dim
+    # Determinism test: if E2 deviates significantly from 1 for d >= 2,
+    # the data is deterministic (stochastic data gives E2 ≈ 1 for all d).
+    # Skip d=1 (first E2 value) as it's always unreliable.
+    is_deterministic = None
+    if len(e2_values) >= 2:
+        # Check E2 values for d >= 2 (skip index 0 = d=1)
+        e2_stable = e2_values[1:]
+        max_deviation = max(abs(e2 - 1.0) for e2 in e2_stable) if e2_stable else 0
+        is_deterministic = max_deviation > 0.1
+
+    return {
+        'dimension': dim_result,
+        'E1_values': [float(v) for v in e1_values],
+        'E2_values': [float(v) for v in e2_values],
+        'is_deterministic': is_deterministic,
+        'E1_saturation_dim': saturation_dim,
+    }

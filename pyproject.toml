@@ -3,15 +3,15 @@ requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "prism-signal"
+name = "prism-engines"
 version = "1.0.0"
-description = "Signal analysis engine: primitives, engines, and pipelines for time-series feature extraction"
+description = "Domain-agnostic dynamical systems analysis — eigendecomposition, FTLE, velocity fields, and urgency metrics"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
     {name = "Jason Rudder"}
 ]
-keywords = ["signal-processing", "time-series", "eigenvalues", "entropy", "complexity", "feature-extraction"]
+keywords = ["dynamical-systems", "diagnostics", "eigendecomposition", "lyapunov", "ftle", "time-series"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
@@ -21,8 +21,9 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Physics",
     "Topic :: Scientific/Engineering :: Information Analysis",
-    "Topic :: Scientific/Engineering :: Mathematics"
 ]
 requires-python = ">=3.9"
 
@@ -32,7 +33,11 @@ dependencies = [
     "polars>=0.20.0",
     "joblib>=1.0.0",
     "pyyaml>=6.0",
+    "pyarrow>=8.0",
 ]
+
+[project.scripts]
+prism = "prism.cli:main"
 
 [project.optional-dependencies]
 dev = [
@@ -52,8 +57,13 @@ ml = [
     "scikit-learn>=1.0.0",
 ]
 
+topology = [
+    "ripser>=0.6",
+    "persim>=0.3",
+]
+
 all = [
-    "prism-signal[dynamics,ml]"
+    "prism-engines[dynamics,ml,topology]"
 ]
 
 [project.urls]

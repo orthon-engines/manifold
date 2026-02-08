@@ -16,7 +16,11 @@ from pathlib import Path
 from typing import List, Dict, Optional, Any
 
 # Import the actual computation from engine
-from prism.engines.state.eigendecomp import compute as compute_eigenvalues_engine
+from prism.engines.state.eigendecomp import (
+    compute as compute_eigenvalues_engine,
+    enforce_eigenvector_continuity,
+    bootstrap_effective_dim,
+)
 
 
 # Feature groups
@@ -135,8 +139,8 @@ def compute_state_geometry(
     groups = signal_vector.group_by(group_cols, maintain_order=True)
     n_groups = signal_vector.select(group_cols).unique().height
 
-    # Track previous PC1 for alignment
-    prev_eigenvalues_by_key: Dict[Any, np.ndarray] = {}
+    # Track previous eigenvectors per (cohort, engine) for continuity enforcement
+    prev_loadings_by_key: Dict[str, np.ndarray] = {}
 
     if verbose:
         print(f"Processing {n_groups} groups...")
@@ -216,6 +220,13 @@ def compute_state_geometry(
             row['ratio_2_1'] = eigen_result['ratio_2_1']
             row['ratio_3_1'] = eigen_result['ratio_3_1']
 
+            # Bootstrap confidence interval for effective_dim
+            if len(matrix) >= 5:
+                bs = bootstrap_effective_dim(matrix, n_bootstrap=50)
+                row['eff_dim_std'] = bs['eff_dim_std']
+                row['eff_dim_ci_low'] = bs['eff_dim_ci_low']
+                row['eff_dim_ci_high'] = bs['eff_dim_ci_high']
+
             # Signal loadings on principal components (for pairwise gating)
             # signal_loadings: N_signals x k matrix (U from SVD)
             # High co-loading on same PC = signals are correlated
@@ -223,14 +234,38 @@ def compute_state_geometry(
             signal_ids = group['signal_id'].to_list() if 'signal_id' in group.columns else []
 
             if signal_loadings is not None and len(signal_ids) > 0:
-                # Store per-signal loadings on PC1 (and PC2 if available)
+                # Eigenvector continuity enforcement across sequential windows
+                continuity_key = f'{cohort}_{engine_name}' if cohort else engine_name
+                flip_count = 0
+
+                if continuity_key in prev_loadings_by_key:
+                    prev = prev_loadings_by_key[continuity_key]
+                    if prev.shape == signal_loadings.shape:
+                        # Count flips before correction
+                        n_pcs = min(3, signal_loadings.shape[1])
+                        for pc in range(n_pcs):
+                            if np.dot(prev[:, pc], signal_loadings[:, pc]) < 0:
+                                flip_count += 1
+                        # Apply continuity correction
+                        signal_loadings = enforce_eigenvector_continuity(
+                            signal_loadings, prev
+                        )
+                prev_loadings_by_key[continuity_key] = signal_loadings
+
+                row['eigenvector_flip_count'] = flip_count
+
+                # Store per-signal loadings on PC1, PC2 (backward compat)
                 for sig_idx, sig_id in enumerate(signal_ids[:len(signal_loadings)]):
                     if sig_idx < len(signal_loadings):
-                        # PC1 loading
                         row[f'pc1_signal_{sig_id}'] = float(signal_loadings[sig_idx, 0])
-                        # PC2 loading (if exists)
                         if signal_loadings.shape[1] > 1:
                             row[f'pc2_signal_{sig_id}'] = float(signal_loadings[sig_idx, 1])
+
+                # Eigenvector columns for visualization projection (top 3 PCs)
+                n_pcs = min(3, signal_loadings.shape[1])
+                for pc in range(n_pcs):
+                    for sig_idx, sig_id in enumerate(signal_ids[:len(signal_loadings)]):
+                        row[f'ev{pc+1}_{sig_id}'] = float(signal_loadings[sig_idx, pc])
 
                 # Store signal_ids list for reference
                 row['signal_ids'] = ','.join(signal_ids)

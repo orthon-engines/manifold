@@ -24,6 +24,7 @@ from prism.primitives.embedding import (
     optimal_delay,
     optimal_dimension,
 )
+from prism.primitives.embedding.delay import cao_embedding_analysis
 from prism.primitives.dynamical.lyapunov import (
     lyapunov_rosenstein,
     lyapunov_kantz,
@@ -36,44 +37,60 @@ def compute(
     method: str = 'rosenstein',
     emb_dim: Optional[int] = None,
     emb_tau: Optional[int] = None,
+    dim_method: str = 'cao',
+    tau_method: str = 'mutual_info',
 ) -> Dict[str, Any]:
     """
     Compute FTLE (Finite-Time Lyapunov Exponent).
-    
+
     Args:
         y: Signal values
         min_samples: Minimum samples required
         method: 'rosenstein' or 'kantz'
         emb_dim: Embedding dimension (auto if None)
         emb_tau: Embedding delay (auto if None)
-        
+        dim_method: 'cao' (default, parameter-free) or 'fnn'
+        tau_method: 'mutual_info' (default, nonlinear) or 'autocorr' or 'autocorr_e'
+
     Returns:
-        dict with ftle, ftle_std, embedding_dim, embedding_tau, confidence
+        dict with ftle, ftle_std, embedding_dim, embedding_tau, confidence,
+        plus embedding_dim_method, tau_method, is_deterministic, E1_saturation_dim
     """
     y = np.asarray(y).flatten()
     y = y[~np.isnan(y)]
     n = len(y)
-    
+
     if n < min_samples:
         return _empty_result()
-    
+
     try:
-        # Auto-detect embedding parameters if not provided
+        # Auto-detect embedding delay
+        tau_used = tau_method if emb_tau is None else 'user'
         if emb_tau is None:
-            emb_tau = optimal_delay(y, max_lag=min(100, n // 10))
-            # Cap delay to ensure enough embedded points
-            max_tau = n // 20  # Ensure at least 20 embedded points
+            emb_tau = optimal_delay(y, max_lag=min(100, n // 10), method=tau_method)
+            max_tau = n // 20
             emb_tau = min(emb_tau, max_tau)
+
+        # Auto-detect embedding dimension with Cao's full analysis
+        dim_used = dim_method if emb_dim is None else 'user'
+        is_deterministic = None
+        e1_saturation_dim = None
+
         if emb_dim is None:
-            emb_dim = optimal_dimension(y, emb_tau, max_dim=10)
+            if dim_method == 'cao':
+                cao_result = cao_embedding_analysis(y, emb_tau, max_dim=10)
+                emb_dim = cao_result['dimension']
+                is_deterministic = cao_result['is_deterministic']
+                e1_saturation_dim = cao_result['E1_saturation_dim']
+            else:
+                emb_dim = optimal_dimension(y, emb_tau, max_dim=10, method=dim_method)
 
         # Check if embedding would leave enough points
         embedded_length = n - (emb_dim - 1) * emb_tau
         if embedded_length < 50:
             return _empty_result()
 
-        # Compute FTLE - pass raw signal with embedding params
-        # (lyapunov_rosenstein does its own embedding internally)
+        # Compute FTLE
         if method == 'kantz':
             ftle, divergence, iterations = lyapunov_kantz(
                 y, dimension=emb_dim, delay=emb_tau
@@ -82,11 +99,9 @@ def compute(
             ftle, divergence, iterations = lyapunov_rosenstein(
                 y, dimension=emb_dim, delay=emb_tau
             )
-        
-        # Compute std of divergence rates if divergence curve available
+
         ftle_std = float(np.std(divergence)) if divergence is not None and len(divergence) > 1 else 0.0
 
-        # Confidence based on iterations (iterations is an array of indices)
         if iterations is not None and len(iterations) > 0:
             confidence = min(1.0, len(iterations) / 100)
         else:
@@ -98,8 +113,12 @@ def compute(
             'embedding_dim': emb_dim,
             'embedding_tau': emb_tau,
             'confidence': confidence,
+            'embedding_dim_method': dim_used,
+            'tau_method': tau_used,
+            'is_deterministic': is_deterministic,
+            'E1_saturation_dim': e1_saturation_dim,
         }
-        
+
     except Exception:
         return _empty_result()
 
@@ -112,6 +131,10 @@ def _empty_result() -> Dict[str, Any]:
         'embedding_dim': None,
         'embedding_tau': None,
         'confidence': 0.0,
+        'embedding_dim_method': None,
+        'tau_method': None,
+        'is_deterministic': None,
+        'E1_saturation_dim': None,
     }
 
 

@@ -447,12 +447,16 @@ Stage Order:
   13: statistics       - Summary stats
   14: correlation      - Correlation matrix
 
-Advanced (opt-in via --stages 15,16,17,18,19):
+Advanced (opt-in via --stages 15,16,...,23 or `python -m prism atlas`):
   15: ftle_field         - Local FTLE fields (LCS detection)
   16: break_sequence     - Propagation order (uses intervention.event_index)
   17: ftle_backward      - Backward FTLE (attracting structures)
   18: segment_comparison - Per-segment geometry with deltas
   19: info_flow_delta    - Per-segment Granger with link changes
+  20: geometry_full      - Expanding window eigendecomp trajectory
+  21: velocity_field     - State-space velocity: direction, speed, curvature
+  22: ftle_rolling       - FTLE at each timestep (stability evolution)
+  23: ridge_proximity    - Urgency = velocity toward FTLE ridge
 
 Examples:
   python -m prism.entry_points.run_pipeline manifest.yaml

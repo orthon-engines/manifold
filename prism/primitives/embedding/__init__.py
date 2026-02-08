@@ -9,6 +9,7 @@ from .delay import (
     optimal_delay,
     optimal_dimension,
     multivariate_embedding,
+    cao_embedding_analysis,
 )
 
 __all__ = [
@@ -20,4 +21,6 @@ __all__ = [
     'optimal_dimension',
     # 69: Multivariate embedding
     'multivariate_embedding',
+    # Cao's method with determinism test
+    'cao_embedding_analysis',
 ]
