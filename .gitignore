@@ -1,5 +1,5 @@
 # =============================================================================
-# PRISM Diagnostics .gitignore
+# ENGINES Diagnostics .gitignore
 # =============================================================================
 # All data lives on local machine - only code and docs go to GitHub
 
@@ -12,8 +12,8 @@
 *.parquet
 
 # SQL pipeline outputs
-prism/sql/outputs/*.parquet
-prism/sql/outputs/manifest.json
+engines/sql/outputs/*.parquet
+engines/sql/outputs/manifest.json
 
 # Raw data files
 *.csv

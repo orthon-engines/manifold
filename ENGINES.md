@@ -1,4 +1,4 @@
-# PRISM Engines & Primitives Reference
+# ENGINES Engines & Primitives Reference
 
 > Mathematical foundations for signal processing, dynamical systems analysis, and predictive diagnostics.
 
@@ -641,4 +641,4 @@ observations.parquet
 
 ---
 
-*Generated for PRISM v2.2.0*
+*Generated for ENGINES v2.2.0*

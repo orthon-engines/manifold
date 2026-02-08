@@ -1,12 +1,12 @@
 """
-Tests for PRISM Break Detection Engine.
+Tests for ENGINES Break Detection Engine.
 
 Tests the Heaviside (step) and Dirac (impulse) detection.
 """
 
 import numpy as np
 import pytest
-from prism.engines.breaks import compute, summarize_breaks
+from engines.engines.breaks import compute, summarize_breaks
 
 
 class TestBreakDetection:

@@ -1,5 +1,5 @@
 """
-PRISM Configuration Module
+ENGINES Configuration Module
 
 Provides hierarchical configuration with defaults and domain/environment overrides.
 

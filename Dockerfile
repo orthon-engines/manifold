@@ -7,7 +7,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy code
-COPY prism/ ./prism/
+COPY engines/ ./engines/
 
 # Expose port
 EXPOSE 8080
@@ -17,4 +17,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
 # Run server
-CMD ["uvicorn", "prism.server.routes:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uvicorn", "engines.server.routes:app", "--host", "0.0.0.0", "--port", "8080"]

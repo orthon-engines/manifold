@@ -1,0 +1,211 @@
+# ENGINES Canonical Schema v2.0.0
+# ==============================
+#
+# THIS IS THE SINGLE SOURCE OF TRUTH.
+#
+# BREAKING CHANGE: entity_id → unit_id (OPTIONAL)
+#
+# All validators read from this file:
+# - ORTHON: data_confirmation.py
+# - ENGINES: data_check.py
+# - Website: AI upload validation
+# - Claude: Integration instructions
+
+version: "2.0.0"
+name: "ENGINES Observations Schema"
+description: "Canonical schema for observations.parquet consumed by ENGINES"
+
+# =============================================================================
+# COLUMNS
+# =============================================================================
+
+columns:
+  unit_id:
+    description: |
+      Optional label for grouping signals.
+
+      This is just a tag - a sticky note for humans.
+      ZERO effect on compute. ENGINES passes it through.
+      Used for SQL filtering after compute.
+
+      Can be:
+      - A physical thing: "pump_1", "patient_42"
+      - A category: "Consumer_Staples", "stocks"
+      - An arbitrary grouping: "friday_data", "batch_001"
+      - Literally anything: "bananas"
+      - Empty: "" (totally fine)
+      - Null: (also fine)
+
+      Cannot be:
+      - An index (that's what I is for)
+      - Sequential numbers used for ordering
+
+    type: "string"
+    nullable: true
+    default: ""
+    required: false
+    examples: ["pump_1", "Consumer_Staples", "friday_data", "bananas", ""]
+
+  signal_id:
+    description: |
+      Identifies what is being measured.
+      Each unique signal_id becomes a vector.
+      REQUIRED - ENGINES needs this.
+    type: "string"
+    nullable: false
+    required: true
+    examples: ["temp", "pressure", "return", "acc_x", "acc_y"]
+
+  I:
+    description: |
+      Index. Orders values within each unit+signal combination.
+      MUST be sequential: 0, 1, 2, 3, ...
+      REQUIRED - ENGINES needs this to build vectors.
+    type: "uint32"
+    nullable: false
+    required: true
+    constraints:
+      - "Sequential integers starting at 0"
+      - "Resets for each unit+signal combination"
+      - "No gaps"
+    examples: [0, 1, 2, 3, 4]
+
+  value:
+    description: |
+      The measurement. The actual number.
+      REQUIRED - this is the data.
+    type: "float64"
+    nullable: true  # NaN allowed for missing data
+    required: true
+    examples: [25.3, -0.0042, 101.325]
+
+# =============================================================================
+# REQUIREMENTS
+# =============================================================================
+
+required_columns: ["signal_id", "I", "value"]
+optional_columns: ["unit_id"]
+
+requirements:
+  min_signals: 2
+  reason: "Pair engines need at least 2 signals"
+
+  min_observations: 50
+  reason: "Windowed engines need sufficient data"
+
+  I_must_be_sequential: true
+  reason: "Vectors must have consistent ordering"
+
+  unit_id_required: false
+  reason: "It's just a label. Blank is fine."
+
+# =============================================================================
+# VALIDATION RULES
+# =============================================================================
+
+validation_rules:
+
+  - id: "REQUIRED_COLUMNS"
+    severity: "error"
+    check: "Required columns present"
+    columns: ["signal_id", "I", "value"]
+
+  - id: "COLUMN_TYPES"
+    severity: "error"
+    check: "Columns have correct types"
+    rules:
+      signal_id: "string"
+      I: "integer (uint32, uint64, int32, int64)"
+      value: "float (float32, float64)"
+      unit_id: "string (if present)"
+
+  - id: "NO_NULLS_IN_REQUIRED"
+    severity: "error"
+    check: "No null values in signal_id, I"
+    columns: ["signal_id", "I"]
+
+  - id: "I_SEQUENTIAL"
+    severity: "error"
+    check: "I is sequential 0,1,2,3... per unit+signal"
+    test: "max(I) - min(I) + 1 == count(I) for each group"
+
+  - id: "I_STARTS_ZERO"
+    severity: "error"
+    check: "I starts at 0 for each unit+signal group"
+    test: "min(I) == 0 for each group"
+
+  - id: "MIN_SIGNALS"
+    severity: "error"
+    check: "At least 2 signals exist"
+    test: "count(distinct signal_id) >= 2"
+    message: "Pair engines require at least 2 signals"
+
+  - id: "MIN_OBSERVATIONS"
+    severity: "warning"
+    check: "Each signal has >=50 observations"
+    test: "count(*) >= 50 for each signal group"
+    message: "Some engines may produce NaN with insufficient data"
+
+# =============================================================================
+# EXAMPLE VALID DATA
+# =============================================================================
+
+example_valid:
+  description: "Correctly formatted observations"
+  data: |
+    unit_id   | signal_id | I | value
+    ----------|-----------|---|------
+    pump_1    | temp      | 0 | 25.3
+    pump_1    | temp      | 1 | 25.4
+    pump_1    | pressure  | 0 | 101.2
+    pump_1    | pressure  | 1 | 101.3
+
+    # unit_id can also be blank:
+              | temp      | 0 | 25.3
+              | temp      | 1 | 25.4
+              | pressure  | 0 | 101.2
+              | pressure  | 1 | 101.3
+
+# =============================================================================
+# OUTPUTS
+# =============================================================================
+
+outputs:
+  description: "ENGINES produces these files when given valid input"
+  files:
+    - name: "primitives.parquet"
+      description: "Signal-level metrics"
+    - name: "primitives_pairs.parquet"
+      description: "Directed pair metrics"
+    - name: "geometry.parquet"
+      description: "Symmetric pair metrics"
+    - name: "topology.parquet"
+      description: "Betti numbers, persistence"
+    - name: "dynamics.parquet"
+      description: "Lyapunov, RQA, Hurst"
+    - name: "information_flow.parquet"
+      description: "Transfer entropy, Granger"
+    - name: "observations_enriched.parquet"
+      description: "Rolling window metrics"
+    - name: "physics.parquet"
+      description: "Energy, entropy metrics"
+
+# =============================================================================
+# HUMAN READABLE SUMMARY
+# =============================================================================
+
+summary: |
+  ENGINES expects observations.parquet with these columns:
+
+  REQUIRED:
+  - signal_id (string): What is being measured
+  - I (integer): Index 0,1,2,3... per signal
+  - value (float): The measurement
+
+  OPTIONAL:
+  - unit_id (string): A label for grouping (blank is fine)
+
+  Rules:
+  - I must be sequential (0,1,2,3...) not sparse
+  - At least 2 signals for pair calculations
+  - unit_id is OPTIONAL - just a tag for SQL later

@@ -3,7 +3,7 @@ requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "prism-engines"
+name = "orthon-engines"
 version = "1.0.0"
 description = "Domain-agnostic dynamical systems analysis — eigendecomposition, FTLE, velocity fields, and urgency metrics"
 readme = "README.md"
@@ -37,7 +37,7 @@ dependencies = [
 ]
 
 [project.scripts]
-prism = "prism.cli:main"
+engines = "engines.cli:main"
 
 [project.optional-dependencies]
 dev = [
@@ -63,18 +63,18 @@ topology = [
 ]
 
 all = [
-    "prism-engines[dynamics,ml,topology]"
+    "orthon-engines[dynamics,ml,topology]"
 ]
 
 [project.urls]
-Homepage = "https://github.com/prism-engines/prism"
-Repository = "https://github.com/prism-engines/prism"
-Documentation = "https://prism-engines.github.io/prism"
-"Bug Reports" = "https://github.com/prism-engines/prism/issues"
+Homepage = "https://github.com/orthon-engines/engines"
+Repository = "https://github.com/orthon-engines/engines"
+Documentation = "https://orthon-engines.github.io/engines"
+"Bug Reports" = "https://github.com/orthon-engines/engines/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["prism*"]
+include = ["engines*"]
 
 [tool.black]
 line-length = 88
@@ -88,7 +88,7 @@ line_length = 88
 testpaths = ["tests"]
 python_files = "test_*.py"
 python_functions = "test_*"
-addopts = "--cov=prism --cov-report=html --cov-report=term-missing"
+addopts = "--cov=engines --cov-report=html --cov-report=term-missing"
 
 [tool.mypy]
 python_version = "3.8"

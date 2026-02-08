@@ -1,10 +1,10 @@
-# PRISM
+# ENGINES
 
 **Domain-agnostic dynamical systems analysis.** Drop a CSV, get eigendecomposition, Lyapunov exponents, velocity fields, and urgency metrics.
 
 ```bash
-pip install prism-engines
-prism run sensor_data.csv
+pip install orthon-engines
+engines run sensor_data.csv
 ```
 
 ---
@@ -13,23 +13,23 @@ prism run sensor_data.csv
 
 ```bash
 # Analyze any CSV (wide format: columns = signals, rows = timepoints)
-prism run data.csv
+engines run data.csv
 
 # Inspect data before running
-prism inspect data.csv
+engines inspect data.csv
 
 # Run with full dynamical atlas (velocity fields, FTLE ridges, urgency)
-prism run data.csv --atlas
+engines run data.csv --atlas
 
 # Explore results in browser
-prism explore output/
+engines explore output/
 ```
 
-PRISM auto-detects your CSV format, generates a manifest, and runs the full pipeline. No configuration needed.
+ENGINES auto-detects your CSV format, generates a manifest, and runs the full pipeline. No configuration needed.
 
 ### Input Formats
 
-PRISM accepts:
+ENGINES accepts:
 
 - **Wide CSV** — columns are signals, rows are timepoints (most common)
 - **Long CSV** — columns: `signal_id`, `value`, and optionally `time`/`index`
@@ -49,15 +49,15 @@ time,temperature,pressure,vibration,flow_rate
 ```
 
 ```bash
-prism run sensors.csv
+engines run sensors.csv
 # Output: 15 parquet files in output/
 ```
 
 ---
 
-## What PRISM Computes
+## What ENGINES Computes
 
-PRISM runs a 15-stage pipeline that transforms raw observations into a complete dynamical characterization:
+ENGINES runs a 15-stage pipeline that transforms raw observations into a complete dynamical characterization:
 
 ### Core Pipeline (stages 0-14)
 
@@ -155,8 +155,8 @@ Found in: `ftle.parquet`
 
 ```python
 # Full pipeline from code
-from prism.input_loader import load_input, detect_data_characteristics, generate_auto_manifest
-from prism.entry_points.run_pipeline import run as run_pipeline
+from engines.input_loader import load_input, detect_data_characteristics, generate_auto_manifest
+from engines.entry_points.run_pipeline import run as run_pipeline
 
 # Load any format
 observations = load_input("data.csv")
@@ -173,19 +173,19 @@ manifest = generate_auto_manifest(chars)
 
 ```python
 # Signal features
-from prism.entry_points.stage_01_signal_vector import run
+from engines.entry_points.stage_01_signal_vector import run
 signal_vector = run("observations.parquet", "signal_vector.parquet", manifest=manifest)
 
 # Eigendecomposition
-from prism.entry_points.stage_03_state_geometry import run
+from engines.entry_points.stage_03_state_geometry import run
 state_geometry = run("signal_vector.parquet", "state_vector.parquet", "state_geometry.parquet")
 
 # FTLE
-from prism.entry_points.stage_08_ftle import run
+from engines.entry_points.stage_08_ftle import run
 ftle = run("observations.parquet", "ftle.parquet")
 
 # Velocity field (atlas)
-from prism.entry_points.stage_21_velocity_field import run
+from engines.entry_points.stage_21_velocity_field import run
 velocity = run("observations.parquet", "velocity_field.parquet")
 ```
 
@@ -193,17 +193,17 @@ velocity = run("observations.parquet", "velocity_field.parquet")
 
 ```python
 # Direct eigendecomposition
-from prism.engines.state.eigendecomp import compute
+from engines.engines.state.eigendecomp import compute
 result = compute(signal_matrix, centroid=centroid)
 # result: eigenvalues, explained_ratio, effective_dim, principal_components, signal_loadings
 
 # Direct FTLE
-from prism.engines.dynamics.ftle import compute as compute_ftle
+from engines.engines.dynamics.ftle import compute as compute_ftle
 result = compute_ftle(time_series, min_samples=200)
 # result: ftle, ftle_std, embedding_dim, embedding_tau, is_deterministic
 
 # Cao's embedding analysis
-from prism.primitives.embedding import cao_embedding_analysis
+from engines.primitives.embedding import cao_embedding_analysis
 cao = cao_embedding_analysis(signal, delay=10)
 # cao: dimension, E1_values, E2_values, is_deterministic
 ```
@@ -213,7 +213,7 @@ cao = cao_embedding_analysis(signal, delay=10)
 ## Architecture
 
 ```
-prism/
+engines/
 ├── cli.py                    CLI: run, inspect, explore, atlas
 ├── input_loader.py           Auto-detect CSV/parquet, generate manifest
 │
@@ -247,26 +247,26 @@ prism/
 
 ```bash
 # Run full pipeline on any input
-prism run <input> [--output DIR] [--atlas] [--manifest FILE] [--segments name:start:end]
+engines run <input> [--output DIR] [--atlas] [--manifest FILE] [--segments name:start:end]
 
 # Inspect data without running
-prism inspect <input>
+engines inspect <input>
 
 # Launch browser-based explorer
-prism explore <output_dir> [--port 8080]
+engines explore <output_dir> [--port 8080]
 
-# Run full atlas pipeline on existing PRISM output
-prism atlas <data_dir> [--output DIR]
+# Run full atlas pipeline on existing output
+engines atlas <data_dir> [--output DIR]
 
 # Individual atlas stages
-prism break-sequence <data_dir>
-prism ftle-backward <data_dir>
-prism geometry-full <data_dir>
-prism velocity-field <data_dir>
-prism ftle-rolling <data_dir>
-prism ridge-proximity <data_dir>
-prism segment-comparison <data_dir>
-prism info-flow-delta <data_dir>
+engines break-sequence <data_dir>
+engines ftle-backward <data_dir>
+engines geometry-full <data_dir>
+engines velocity-field <data_dir>
+engines ftle-rolling <data_dir>
+engines ridge-proximity <data_dir>
+engines segment-comparison <data_dir>
+engines info-flow-delta <data_dir>
 ```
 
 ---
@@ -282,8 +282,8 @@ Optional:
 - `ripser`, `persim` — topological data analysis
 
 ```bash
-pip install prism-engines          # core
-pip install prism-engines[all]     # everything
+pip install orthon-engines          # core
+pip install orthon-engines[all]     # everything
 ```
 
 ---
@@ -303,11 +303,11 @@ pip install prism-engines[all]     # everything
 ## Citation
 
 ```bibtex
-@software{prism2026,
-  title = {PRISM: Domain-Agnostic Dynamical Systems Analysis},
+@software{engines2026,
+  title = {ENGINES: Domain-Agnostic Dynamical Systems Analysis},
   author = {Rudder, Jason},
   year = {2026},
-  url = {https://github.com/prism-engines/prism}
+  url = {https://github.com/orthon-engines/engines}
 }
 ```
 

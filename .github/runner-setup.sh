@@ -1,5 +1,5 @@
 #!/bin/bash
-# PRISM Self-Hosted Runner Setup
+# ENGINES Self-Hosted Runner Setup
 #
 # Run this once to set up the GitHub Actions runner on your machine.
 #
@@ -14,9 +14,9 @@
 set -e
 
 RUNNER_DIR="$HOME/actions-runner"
-REPO="prism-engines/prism"
+REPO="orthon-engines/engines"
 
-echo "=== PRISM Self-Hosted Runner Setup ==="
+echo "=== ENGINES Self-Hosted Runner Setup ==="
 echo ""
 
 # Check for token
@@ -70,8 +70,8 @@ fi
 echo "Configuring runner..."
 ./config.sh --url "https://github.com/$REPO" \
     --token "$REG_TOKEN" \
-    --name "prism-local" \
-    --labels "self-hosted,prism,macos" \
+    --name "engines-local" \
+    --labels "self-hosted,engines,macos" \
     --work "_work" \
     --unattended
 

@@ -1,5 +1,5 @@
 """
-PRISM Configuration Manager
+ENGINES Configuration Manager
 
 Loads and merges configuration from YAML files with hierarchical overrides:
     defaults/ < domains/{domain}.yaml < environments/{env}.yaml

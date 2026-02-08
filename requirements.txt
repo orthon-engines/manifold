@@ -30,7 +30,7 @@ pillow==12.1.0
 pluggy==1.6.0
 polars==1.37.1
 polars-runtime-32==1.37.1
--e git+https://github.com/prism-engines/prism.git@52e6982d092d846dc2b9a80ce1560d5b89daa7d0#egg=prism_signal
+-e git+https://github.com/orthon-engines/engines.git@52e6982d092d846dc2b9a80ce1560d5b89daa7d0#egg=orthon_engines
 pyarrow==23.0.0
 pydantic==2.12.5
 pydantic_core==2.41.5
