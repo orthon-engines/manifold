@@ -133,9 +133,16 @@ def compute_cohorts(
             'n_windows': n_windows,
         }
 
-        # Get n_signals from first window
+        # Get n_signals from state_vector or fall back to signal_vector
         if 'n_signals' in sv.columns:
             result['n_signals'] = int(sv['n_signals'].head(1).item())
+        elif signal_vector_df is not None and 'signal_id' in signal_vector_df.columns:
+            sig_col = 'cohort' if cohort_column in signal_vector_df.columns else None
+            if sig_col and cohort != '_all_':
+                sv_filt = signal_vector_df.filter(pl.col(sig_col) == cohort)
+                result['n_signals'] = sv_filt['signal_id'].n_unique()
+            else:
+                result['n_signals'] = signal_vector_df['signal_id'].n_unique()
 
         # === GEOMETRY SUMMARY ===
         if len(sg) > 0 and 'effective_dim' in sg.columns:

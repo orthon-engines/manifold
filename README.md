@@ -1,5 +1,7 @@
 # Engines
 
+A method for domain-agnostic signal degradation detection comprising: (a) classifying input signals by typology without domain metadata; (b) computing eigenvalue decomposition over sliding windows to extract geometric signatures; (c) detecting dimensional collapse patterns across said windows using lookup tables without supervised training or machine learning models; (d) producing degradation scores that are invariant to signal domain.
+
 **Dynamical systems computation engines.** Part of the [Orthon Engines](https://github.com/orthon-engines) platform. Drop a CSV, get eigendecomposition, Lyapunov exponents, velocity fields, and urgency metrics.
 
 ```bash

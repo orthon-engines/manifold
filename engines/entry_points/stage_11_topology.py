@@ -178,8 +178,11 @@ def run(
         result = compute_basic_topology(matrix.T, threshold=adaptive_threshold)
         results.append(result)
 
-    # Build DataFrame
+    # Build DataFrame — only keep rows where topology was actually computed
     df = pl.DataFrame(results) if results else pl.DataFrame()
+
+    if len(df) > 0 and 'topology_computed' in df.columns:
+        df = df.filter(pl.col('topology_computed') == True)
 
     if len(df) > 0:
         df.write_parquet(output_path)

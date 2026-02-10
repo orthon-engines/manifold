@@ -731,6 +731,21 @@ def run(
             .alias(col)
         )
 
+    # Prune dead columns: drop feature columns that are >90% null
+    meta_cols_keep = {'unit_id', 'I', 'signal_id', 'signal_name', 'n_samples',
+                      'window_size', 'cohort'}
+    n_rows = len(df)
+    if n_rows > 0:
+        dead_cols = [
+            c for c in df.columns
+            if c not in meta_cols_keep
+            and df[c].null_count() / n_rows > 0.90
+        ]
+        if dead_cols:
+            if verbose:
+                print(f"  Pruning {len(dead_cols)} dead columns (>90% null)")
+            df = df.drop(dead_cols)
+
     # Always write output (overwrite if exists)
     df.write_parquet(output_path)
 

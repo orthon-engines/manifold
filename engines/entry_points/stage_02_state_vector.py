@@ -170,7 +170,16 @@ def compute_state_vector(
             continue
 
         composite_matrix = group.select(available_composite).to_numpy()
+
+        # Skip groups with fewer than 2 signals (centroid is meaningless)
+        if composite_matrix.shape[0] < 2:
+            continue
+
         state = compute_centroid(composite_matrix, available_composite)
+
+        # Skip if centroid engine returned insufficient signals
+        if state['n_signals'] < 2:
+            continue
 
         # Build result row
         row = {

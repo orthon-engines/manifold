@@ -49,6 +49,15 @@ ADVANCED_STAGES = [
     'stage_22_ftle_rolling',       # FTLE at each timestep
     'stage_23_ridge_proximity',    # Urgency = velocity toward FTLE ridge
     'stage_24_gaussian_fingerprint',  # Gaussian fingerprints + pairwise similarity
+    # Scale 2: cohort_vector → system_geometry (requires n_cohorts >= 2)
+    'stage_25_cohort_vector',          # Pivot state_geometry engines to wide cohort features
+    'stage_26_system_geometry',        # Eigendecomposition of cohort feature matrix
+    'stage_27_cohort_pairwise',        # Pairwise metrics between cohorts per I
+    'stage_28_cohort_information_flow', # Granger causality between cohort trajectories
+    'stage_29_cohort_topology',        # Graph topology from cohort correlation matrix
+    'stage_30_cohort_ftle',            # FTLE on cohort trajectories
+    'stage_31_cohort_velocity_field',  # Velocity of cohorts through feature space
+    'stage_32_cohort_fingerprint',     # Gaussian fingerprints + Bhattacharyya similarity
 ]
 
 # Stage dependencies for validation
@@ -77,6 +86,14 @@ STAGE_DEPS = {
     'stage_22_ftle_rolling': ['observations.parquet'],
     'stage_23_ridge_proximity': ['ftle_rolling.parquet', 'velocity_field.parquet'],
     'stage_24_gaussian_fingerprint': ['signal_vector.parquet'],
+    'stage_25_cohort_vector': ['state_geometry.parquet'],
+    'stage_26_system_geometry': ['cohort_vector.parquet'],
+    'stage_27_cohort_pairwise': ['cohort_vector.parquet'],
+    'stage_28_cohort_information_flow': ['cohort_vector.parquet', 'cohort_pairwise.parquet'],
+    'stage_29_cohort_topology': ['cohort_vector.parquet'],
+    'stage_30_cohort_ftle': ['cohort_vector.parquet'],
+    'stage_31_cohort_velocity_field': ['cohort_vector.parquet'],
+    'stage_32_cohort_fingerprint': ['cohort_vector.parquet'],
 }
 
 
@@ -318,17 +335,23 @@ def run(
 
             elif stage_num == '17':
                 # Backward FTLE - attracting structures
-                # Compute backward, then merge into ftle.parquet alongside forward
+                # Compute backward, merge into ftle.parquet (no separate ftle_backward file)
                 import polars as _pl
+                import tempfile as _tmpf
                 obs_path = manifest_path.parent / manifest['paths']['observations']
                 intervention = manifest.get('intervention')
+                # Write to temp file, then merge into ftle.parquet
+                with _tmpf.NamedTemporaryFile(suffix='.parquet', delete=False) as _tmp:
+                    _tmp_path = _tmp.name
                 bwd = module.run(
                     str(obs_path),
-                    str(output_dir / 'ftle_backward.parquet'),
+                    _tmp_path,
                     verbose=verbose,
                     intervention=intervention,
                     direction='backward',
                 )
+                # Clean up temp file
+                Path(_tmp_path).unlink(missing_ok=True)
                 # Merge backward into ftle.parquet if forward exists
                 ftle_path = output_dir / 'ftle.parquet'
                 if ftle_path.exists() and len(bwd) > 0:
@@ -425,6 +448,100 @@ def run(
                     verbose=verbose,
                 )
 
+            elif stage_num in ('25', '26', '27', '28', '29', '30', '31', '32'):
+                # ── Scale 2 guard ──
+                # Skip all Scale 2 stages if state_geometry is missing/empty or n_cohorts < 2
+                import polars as _pl_s2
+                sg_path = output_dir / 'state_geometry.parquet'
+                if not sg_path.exists():
+                    if verbose:
+                        print("  Skipped (state_geometry.parquet not found)")
+                    continue
+                _sg = _pl_s2.read_parquet(str(sg_path))
+                if len(_sg) == 0:
+                    if verbose:
+                        print("  Skipped (state_geometry.parquet is empty)")
+                    continue
+                if 'cohort' not in _sg.columns or _sg['cohort'].n_unique() < 2:
+                    if verbose:
+                        print(f"  Skipped (n_cohorts={_sg['cohort'].n_unique() if 'cohort' in _sg.columns else 0} < 2)")
+                    continue
+
+                # ── Scale 2 dispatch ──
+                if stage_num == '25':
+                    # Cohort vector: pivot state_geometry engines to wide
+                    module.run(
+                        str(sg_path),
+                        str(output_dir / 'cohort_vector.parquet'),
+                        verbose=verbose,
+                    )
+
+                elif stage_num == '26':
+                    # System geometry: eigendecomp of cohort feature matrix
+                    module.run(
+                        str(output_dir / 'cohort_vector.parquet'),
+                        str(output_dir / 'system_geometry.parquet'),
+                        verbose=verbose,
+                    )
+
+                elif stage_num == '27':
+                    # Cohort pairwise: distance, correlation, cosine
+                    loadings_path = output_dir / 'system_geometry_loadings.parquet'
+                    module.run(
+                        str(output_dir / 'cohort_vector.parquet'),
+                        str(output_dir / 'cohort_pairwise.parquet'),
+                        system_geometry_loadings_path=str(loadings_path) if loadings_path.exists() else None,
+                        verbose=verbose,
+                    )
+
+                elif stage_num == '28':
+                    # Cohort information flow: Granger causality between cohort trajectories
+                    pairwise_file = output_dir / 'cohort_pairwise.parquet'
+                    if pairwise_file.exists() and len(_pl_s2.read_parquet(str(pairwise_file))) > 0:
+                        module.run(
+                            str(output_dir / 'cohort_vector.parquet'),
+                            str(pairwise_file),
+                            str(output_dir / 'cohort_information_flow.parquet'),
+                            verbose=verbose,
+                        )
+                    else:
+                        if verbose:
+                            print("  Skipped (empty cohort_pairwise)")
+                        _pl_s2.DataFrame().write_parquet(str(output_dir / 'cohort_information_flow.parquet'))
+
+                elif stage_num == '29':
+                    # Cohort topology: graph from cohort correlation matrix
+                    module.run(
+                        str(output_dir / 'cohort_vector.parquet'),
+                        str(output_dir / 'cohort_topology.parquet'),
+                        verbose=verbose,
+                    )
+
+                elif stage_num == '30':
+                    # Cohort FTLE: Lyapunov exponents for cohort trajectories
+                    module.run(
+                        str(output_dir / 'cohort_vector.parquet'),
+                        str(output_dir / 'cohort_ftle.parquet'),
+                        verbose=verbose,
+                    )
+
+                elif stage_num == '31':
+                    # Cohort velocity field: speed, acceleration, curvature
+                    module.run(
+                        str(output_dir / 'cohort_vector.parquet'),
+                        str(output_dir / 'cohort_velocity_field.parquet'),
+                        verbose=verbose,
+                    )
+
+                elif stage_num == '32':
+                    # Cohort fingerprint + similarity
+                    module.run(
+                        str(output_dir / 'cohort_vector.parquet'),
+                        str(output_dir / 'cohort_fingerprint.parquet'),
+                        str(output_dir / 'cohort_similarity.parquet'),
+                        verbose=verbose,
+                    )
+
             else:
                 if verbose:
                     print(f"  Warning: Unknown stage number {stage_num}")
@@ -467,7 +584,7 @@ Stage Order:
   13: statistics       - Summary stats
   14: correlation      - Correlation matrix
 
-Advanced (opt-in via --stages 15,16,...,23 or `python -m engines atlas`):
+Advanced (opt-in via --stages 15,16,...,32 or `python -m engines atlas`):
   15: ftle_field         - Local FTLE fields (LCS detection)
   16: break_sequence     - Propagation order (uses intervention.event_index)
   17: ftle_backward      - Backward FTLE (attracting structures)
@@ -476,6 +593,17 @@ Advanced (opt-in via --stages 15,16,...,23 or `python -m engines atlas`):
   21: velocity_field     - State-space velocity: direction, speed, curvature
   22: ftle_rolling       - FTLE at each timestep (stability evolution)
   23: ridge_proximity    - Urgency = velocity toward FTLE ridge
+  24: gaussian_fingerprint - Signal fingerprints + Bhattacharyya similarity
+
+Scale 2 (system geometry — requires n_cohorts >= 2):
+  25: cohort_vector      - Pivot state_geometry to wide cohort features
+  26: system_geometry    - Eigendecomp of cohort feature matrix
+  27: cohort_pairwise    - Pairwise metrics between cohorts
+  28: cohort_info_flow   - Granger causality between cohort trajectories
+  29: cohort_topology    - Graph topology from cohort correlation
+  30: cohort_ftle        - FTLE on cohort trajectories
+  31: cohort_velocity    - Velocity of cohorts in feature space
+  32: cohort_fingerprint - Gaussian fingerprints + Bhattacharyya similarity
 
 Examples:
   python -m engines.entry_points.run_pipeline manifest.yaml
