@@ -37,7 +37,7 @@ def compute_basic_topology(signal_matrix: np.ndarray, threshold: float = None) -
     Returns:
         Dict with topological metrics
     """
-    if signal_matrix.shape[0] < 3:
+    if signal_matrix.shape[0] < 3 or signal_matrix.shape[1] < 2:
         return {'topology_computed': False}
 
     # Basic connectivity analysis

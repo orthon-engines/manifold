@@ -330,6 +330,14 @@ def compute_geometry_dynamics(
         print(f"Loaded: {len(state_geometry)} rows")
         print(f"Columns: {state_geometry.columns}")
 
+    # Guard: empty input
+    if len(state_geometry) == 0 or 'engine' not in state_geometry.columns:
+        if verbose:
+            print("  No state geometry data to process (empty input)")
+        empty = pl.DataFrame()
+        empty.write_parquet(output_path)
+        return empty
+
     # Determine grouping columns - include cohort if present
     has_cohort = 'cohort' in state_geometry.columns
     group_cols = ['cohort', 'engine'] if has_cohort else ['engine']

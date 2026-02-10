@@ -341,12 +341,13 @@ def compute_state_geometry(
         print("─" * 50)
 
         # Summary per engine
-        for engine_name in feature_groups.keys():
-            engine_data = result.filter(pl.col('engine') == engine_name)
-            if len(engine_data) > 0:
-                print(f"\n{engine_name} engine:")
-                print(f"  effective_dim: mean={engine_data['effective_dim'].mean():.2f}, "
-                      f"std={engine_data['effective_dim'].std():.2f}")
+        if len(result) > 0 and 'engine' in result.columns:
+            for engine_name in feature_groups.keys():
+                engine_data = result.filter(pl.col('engine') == engine_name)
+                if len(engine_data) > 0:
+                    print(f"\n{engine_name} engine:")
+                    print(f"  effective_dim: mean={engine_data['effective_dim'].mean():.2f}, "
+                          f"std={engine_data['effective_dim'].std():.2f}")
 
     return result
 

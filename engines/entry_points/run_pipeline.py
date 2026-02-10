@@ -254,13 +254,20 @@ def run(
 
             elif stage_num == '10':
                 # Information flow - uses signal_pairwise for Granger gating + observations for time series
-                obs_path = manifest_path.parent / manifest['paths']['observations']
-                module.run(
-                    str(obs_path),
-                    str(output_dir / 'signal_pairwise.parquet'),
-                    str(output_dir / 'information_flow.parquet'),
-                    verbose=verbose,
-                )
+                import polars as _pl10
+                pairwise_file = output_dir / 'signal_pairwise.parquet'
+                if pairwise_file.exists() and len(_pl10.read_parquet(str(pairwise_file))) > 0:
+                    obs_path = manifest_path.parent / manifest['paths']['observations']
+                    module.run(
+                        str(obs_path),
+                        str(pairwise_file),
+                        str(output_dir / 'information_flow.parquet'),
+                        verbose=verbose,
+                    )
+                else:
+                    if verbose:
+                        print("  Skipped (empty signal_pairwise)")
+                    _pl10.DataFrame().write_parquet(str(output_dir / 'information_flow.parquet'))
 
             elif stage_num == '11':
                 # Topology - current implementation takes signal_vector
