@@ -731,11 +731,12 @@ def run(
             .alias(col)
         )
 
-    # Prune dead columns: drop feature columns that are >90% null
+    # Prune dead columns
     meta_cols_keep = {'unit_id', 'I', 'signal_id', 'signal_name', 'n_samples',
                       'window_size', 'cohort'}
     n_rows = len(df)
     if n_rows > 0:
+        # Phase 1: Drop columns >90% null globally (universally broken engines)
         dead_cols = [
             c for c in df.columns
             if c not in meta_cols_keep
@@ -745,6 +746,28 @@ def run(
             if verbose:
                 print(f"  Pruning {len(dead_cols)} dead columns (>90% null)")
             df = df.drop(dead_cols)
+
+        # Phase 2: Drop columns 100% null for any signal (engine not applicable
+        # to that signal type — e.g. trend engines on broadband signals).
+        # Different signal types have different engine sets in the manifest.
+        # The wide format creates null columns for inapplicable engines.
+        if 'signal_id' in df.columns:
+            feature_cols = [c for c in df.columns if c not in meta_cols_keep]
+            signals = df['signal_id'].unique().to_list()
+            if len(signals) > 1 and feature_cols:
+                inapplicable = set()
+                for sig in signals:
+                    sig_df = df.filter(pl.col('signal_id') == sig)
+                    sig_n = len(sig_df)
+                    if sig_n == 0:
+                        continue
+                    for c in feature_cols:
+                        if c not in inapplicable and sig_df[c].null_count() == sig_n:
+                            inapplicable.add(c)
+                if inapplicable:
+                    if verbose:
+                        print(f"  Pruning {len(inapplicable)} engine-specific columns (inapplicable to ≥1 signal type)")
+                    df = df.drop(list(inapplicable))
 
     # Always write output (overwrite if exists)
     df.write_parquet(output_path)
