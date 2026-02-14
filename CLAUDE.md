@@ -15,10 +15,10 @@ This file provides guidance to Claude Code when working with this repository.
 find . -name "*.py" | xargs grep -l "function_name"
 
 # Find existing patterns
-grep -r "def compute" engines/manifold/
+grep -r "def compute" manifold/core/
 
 # Find how similar things are done
-grep -r "sample_rate" engines/
+grep -r "sample_rate" manifold/
 ```
 
 **If you think something doesn't exist, ASK THE USER before creating it.**
@@ -29,10 +29,10 @@ If a function, engine, or pattern exists in the repo, **USE IT**. Do not recreat
 
 ```
 WRONG: "I'll write a quick FFT function..."
-RIGHT: "I see engines/primitives/spectral.py has psd() — using that."
+RIGHT: "I see manifold/primitives/individual/spectral.py has psd() — using that."
 
 WRONG: "Let me create a runner to orchestrate this..."
-RIGHT: "I see engines/signal_vector/runner.py handles this — adding to it."
+RIGHT: "I see manifold/stages/vector/ handles this — adding to it."
 ```
 
 ### Rule 2: NO ROGUE FILE CREATION
@@ -55,20 +55,20 @@ Before modifying any file, show:
 
 ```
 WRONG: *silently creates new_runner.py*
-RIGHT: "I found runner.py at engines/signal_vector/runner.py.
+RIGHT: "I found breaks.py at manifold/stages/vector/breaks.py.
         I'll add the new function there following the existing pattern.
         Here's the current structure: [shows code]
         Okay to proceed?"
 ```
 
-### Rule 4: ENGINES COMPUTES, ORTHON CLASSIFIES
+### Rule 4: MANIFOLD COMPUTES, ORTHON CLASSIFIES
 
-- Do NOT create typology logic, classification rules, or signal labels in ENGINES
+- Do NOT create typology logic, classification rules, or signal labels in MANIFOLD
 - Do NOT modify observations.parquet or typology.parquet
 - Do NOT second-guess manifest.yaml — execute what it says
 - If MANIFEST_CONTRACT.md doesn't answer your question, ASK THE USER
 
-**If you find yourself writing `if signal_type == 'PERIODIC'` in ENGINES, STOP.
+**If you find yourself writing `if signal_type == 'PERIODIC'` in MANIFOLD, STOP.
 That is classification. Classification belongs in ORTHON.**
 
 ---
@@ -79,7 +79,7 @@ That is classification. Classification belongs in ORTHON.**
 |----------|-------------------|
 | Create scripts in /tmp | Hides work, not verifiable |
 | Create "one-off" runners | Bypasses established patterns |
-| Inline compute in orchestrators | Engines compute, orchestrators orchestrate |
+| Inline compute in stages | Core computes, stages orchestrate |
 | Duplicate existing functionality | Creates inconsistency |
 | Create new venv | Use existing `./venv/` |
 | Guess at implementations | Ask if unsure |
@@ -107,7 +107,7 @@ WRONG:
   "Here's a temporary solution..."
 
 RIGHT:
-  "I found the existing runner at [path]. Adding to it."
+  "I found the existing stage at [path]. Adding to it."
   "This matches the pattern in [existing file]. Following that."
   "The manifest contract says [X]. Implementing exactly that."
 ```
@@ -119,7 +119,7 @@ RIGHT:
 | Behavior | How To Do It |
 |----------|--------------|
 | Call existing engines | `engine_registry[name](window)` |
-| Sequence operations | Chain existing entry points |
+| Sequence operations | Chain existing stages via `manifold/run.py` |
 | Pass config from manifest | Read and forward, don't interpret |
 | Add to existing files | Show the file first, get approval |
 | Create new engine | Follow existing engine pattern, propose location first |
@@ -128,29 +128,77 @@ RIGHT:
 
 ## Architecture
 
-Orthon Engines is a domain-agnostic dynamical systems analysis platform.
-- **orthon-engines/orthon** — dynamical systems analysis interpreter (brain)
-- **orthon-engines/engines** — dynamical systems computation engines (muscle)
+Manifold is a domain-agnostic dynamical systems computation engine.
+- **orthon** — dynamical systems analysis interpreter (brain)
+- **manifold** — dynamical systems computation (muscle)
 
-### Pipeline (24 stages)
-
-The full pipeline always runs all stages (core + atlas).
+### Four Layers
 
 ```
-observations.parquet + typology.parquet + manifest.yaml  (from Orthon)
+manifold/primitives/   Pure math (numpy → float). No I/O, no DataFrames.
+manifold/core/         Compute engines (DataFrames → DataFrames). signal/, state/, dynamics/, pairwise/.
+manifold/stages/       Stage runners (orchestration only). 5 groups, 27 stages.
+manifold/io/           Parquet reader, writer, manifest loader.
+```
+
+### Five Stage Groups
+
+| Group | Directory | Purpose | Output Dirs |
+|-------|-----------|---------|-------------|
+| vector | `manifold/stages/vector/` | Signal features | 1_signal_features |
+| geometry | `manifold/stages/geometry/` | System state | 2_system_state, 3_health_scoring |
+| dynamics | `manifold/stages/dynamics/` | Trajectory evolution | 5_evolution |
+| information | `manifold/stages/information/` | Pairwise relationships | 4_signal_relationships |
+| energy | `manifold/stages/energy/` | Fleet analysis | 6_fleet |
+
+### Pipeline (27 stages)
+
+All stages always run. No opt-in, no tiers.
+
+```
+observations.parquet + manifest.yaml
         │
         ▼
-  Core (stages 00-14):
-    00 breaks           01 signal_vector     02 state_vector
-    03 state_geometry    04 cohorts           05 signal_geometry
-    06 signal_pairwise   07 geometry_dynamics 08 ftle
-    09 dynamics          10 information_flow  11 topology
-    12 zscore            13 statistics        14 correlation
+  vector:
+    00 breaks              01 signal_vector       33 signal_stability
 
-  Atlas (stages 15-23):
-    15 ftle_field         16 break_sequence    17 ftle_backward
-    18 segment_comparison 19 info_flow_delta   20 geometry_full
-    21 velocity_field     22 ftle_rolling      23 ridge_proximity
+  geometry:
+    02 state_vector        03 state_geometry       05 signal_geometry
+    07 geometry_dynamics   20 sensor_eigendecomp   34 cohort_baseline
+    35 observation_geometry
+
+  dynamics:
+    08 ftle                08_lyapunov             09a cohort_thermodynamics
+    15 ftle_field          17 ftle_backward        21 velocity_field
+    22 ftle_rolling        23 ridge_proximity
+
+  information:
+    06 signal_pairwise     10 information_flow     18 segment_comparison
+    19 info_flow_delta
+
+  energy (requires n_cohorts >= 2):
+    26 system_geometry     27 cohort_pairwise      28 cohort_information_flow
+    30 cohort_ftle         31 cohort_velocity_field
+```
+
+### Output: 6 Named Directories
+
+```
+output/
+├── 1_signal_features/        signal_vector, signal_geometry, signal_stability
+├── 2_system_state/           state_vector, state_geometry, geometry_dynamics, sensor_eigendecomp
+├── 3_health_scoring/         breaks, cohort_baseline, observation_geometry
+├── 4_signal_relationships/   signal_pairwise, information_flow, segment_comparison, info_flow_delta
+├── 5_evolution/              ftle, lyapunov, ftle_field, ftle_backward, velocity_field, ftle_rolling, ridge_proximity
+└── 6_fleet/                  system_geometry, cohort_pairwise, cohort_information_flow, cohort_ftle, cohort_velocity_field
+```
+
+### Running
+
+```bash
+python -m manifold data/rossler               # Full pipeline
+python -m manifold data/rossler --stages 01,02,03   # Subset
+python -m manifold data/rossler --skip 08,09a       # Skip specific
 ```
 
 ---
@@ -177,7 +225,7 @@ observations.parquet + typology.parquet + manifest.yaml  (from Orthon)
 
 **When system window < engine minimum:**
 - Manifest specifies `engine_window_overrides`
-- ENGINES uses expanded window for that engine
+- Manifold uses expanded window for that engine
 - I (window end index) alignment is preserved
 
 **Do NOT lower engine minimums to fit small windows. The math doesn't work.**
@@ -187,47 +235,58 @@ observations.parquet + typology.parquet + manifest.yaml  (from Orthon)
 ## Directory Structure
 
 ```
-~/engines/
+~/manifold/
 ├── CLAUDE.md                     # This file
 ├── README.md                     # Project docs
 ├── LICENSE.md                    # PolyForm Noncommercial 1.0.0
-├── pyproject.toml                # Package: orthon-engines
+├── pyproject.toml                # Package config
 ├── requirements.txt              # Dev dependencies
-├── requirements.web.txt          # Web service dependencies (FastAPI)
-├── Dockerfile                    # Web service container
-├── fly.toml                      # Fly.io deployment config
-├── .dockerignore
-├── server.py                     # FastAPI web service (CSV upload → atlas)
-├── static/index.html             # Web UI (registration + upload)
+├── config/                       # Domain & environment YAML configs
+├── tests/                        # Test suite
+├── docs/                         # Documentation
 │
-├── engines/                      # Main Python package
-│   ├── __init__.py               # Public API (180+ functions)
-│   ├── cli.py                    # CLI: run, inspect, explore, atlas
-│   ├── input_loader.py           # Auto-detect CSV/parquet, generate manifest
+├── manifold/                     # Main Python package
+│   ├── __init__.py               # Package docstring
+│   ├── __main__.py               # python -m manifold entry point
+│   ├── run.py                    # Pipeline sequencer (27 stages)
 │   │
-│   ├── entry_points/             # Stage orchestrators (24 stages)
-│   │   ├── run_pipeline.py       # Full pipeline orchestrator
-│   │   ├── stage_00_breaks.py    # → breaks.parquet
-│   │   ├── stage_01_signal_vector.py  # → signal_vector.parquet
-│   │   ├── stage_02_state_vector.py   # → state_vector.parquet
-│   │   ├── stage_03_state_geometry.py # → state_geometry.parquet
-│   │   ├── stage_04_cohorts.py        # → cohorts.parquet
-│   │   ├── stage_05-14_*.py           # geometry, dynamics, sql
-│   │   └── stage_15-23_*.py           # Atlas engines
+│   ├── io/                       # I/O layer (all parquet reads/writes)
+│   │   ├── reader.py             # STAGE_DIRS mapping, load_observations
+│   │   ├── writer.py             # write_output, write_sidecar
+│   │   └── manifest.py           # load_manifest, get_observations_path
 │   │
-│   ├── manifold/                 # Compute engines (numpy → dicts)
+│   ├── stages/                   # Stage runners (orchestration, no math)
+│   │   ├── vector/               # breaks, signal_vector, signal_stability
+│   │   ├── geometry/             # state_vector, state_geometry, signal_geometry,
+│   │   │                         #   geometry_dynamics, sensor_eigendecomp,
+│   │   │                         #   cohort_baseline, observation_geometry
+│   │   ├── dynamics/             # ftle, lyapunov, cohort_thermodynamics,
+│   │   │                         #   ftle_field, ftle_backward, velocity_field,
+│   │   │                         #   ftle_rolling, ridge_proximity
+│   │   ├── information/          # signal_pairwise, information_flow,
+│   │   │                         #   segment_comparison, info_flow_delta
+│   │   └── energy/               # system_geometry, cohort_pairwise,
+│   │                             #   cohort_information_flow, cohort_ftle,
+│   │                             #   cohort_velocity_field
+│   │
+│   ├── core/                     # Compute engines (DataFrames → DataFrames)
 │   │   ├── signal/               # 38 per-signal engines (spectral, hurst, entropy, etc.)
 │   │   ├── state/                # Centroid, eigendecomposition (SVD)
 │   │   ├── dynamics/             # FTLE, Lyapunov, attractor, saddle detection
-│   │   ├── geometry/             # Signal-to-state relationships
-│   │   ├── pairwise/             # Correlation, Granger causality
+│   │   ├── geometry/             # Feature group config
+│   │   ├── pairwise/             # Correlation, Granger causality, copula
 │   │   ├── parallel/             # Parallel runners (dynamics, info flow, topology)
 │   │   ├── sql/                  # SQL engines (zscore, statistics, correlation)
+│   │   ├── signal_geometry.py    # Per-signal → state relationships
+│   │   ├── state_geometry.py     # Eigenvalues and shape metrics
+│   │   ├── geometry_dynamics.py  # Derivatives, curvature, collapse detection
+│   │   ├── signal_pairwise.py   # Signal-to-signal pairwise
 │   │   ├── registry.py           # Engine discovery & loading
 │   │   ├── base.py               # BaseEngine class
-│   │   └── rolling.py            # Rolling window wrapper
+│   │   ├── rolling.py            # Rolling window wrapper
+│   │   └── normalization.py      # Z-score, robust, MAD, min-max
 │   │
-│   ├── primitives/               # Pure math (numpy → float)
+│   ├── primitives/               # Pure math (numpy → float, no I/O)
 │   │   ├── individual/           # Statistics, spectral, entropy, derivatives, etc.
 │   │   ├── embedding/            # Delay embedding, Cao's method, AMI
 │   │   ├── dynamical/            # FTLE, Lyapunov, RQA, saddle
@@ -238,25 +297,35 @@ observations.parquet + typology.parquet + manifest.yaml  (from Orthon)
 │   │   ├── topology/             # Persistent homology, distance
 │   │   └── tests/                # Bootstrap, hypothesis, null models
 │   │
-│   ├── server/                   # HTTP server (streaming protocol)
-│   ├── stream/                   # Streaming I/O (parser, buffer, writer)
-│   ├── validation/               # Input validation & prerequisites
-│   ├── config/                   # Metric requirements
-│   └── tests/                    # Internal tests
+│   └── validation/               # Input validation & prerequisites
 │
-├── config/                       # Domain & environment YAML configs
-├── tests/                        # Test suite
-└── docs/                         # Documentation
+└── data/                         # Domain datasets (rossler, etc.)
 ```
 
 ### Where New Code Goes
 
 | Type of Code | Location | Pattern to Follow |
 |--------------|----------|-------------------|
-| New signal engine | `engines/manifold/signal/` | Copy `kurtosis.py` pattern |
-| New rolling engine | `engines/manifold/rolling/` | Copy existing rolling pattern |
-| New primitive | `engines/primitives/individual/` | Pure function, no I/O |
+| New signal engine | `manifold/core/signal/` | Copy `kurtosis.py` pattern |
+| New rolling engine | `manifold/core/rolling.py` | Add to existing rolling wrapper |
+| New primitive | `manifold/primitives/individual/` | Pure function, no I/O |
 | New stage | ASK FIRST | Probably doesn't need new stage |
+| New pairwise primitive | `manifold/primitives/pairwise/` | Pure function, no I/O |
+
+### Import Conventions
+
+```python
+# Primitives: direct function imports
+from manifold.primitives.individual.spectral import psd, spectral_entropy
+from manifold.primitives.individual.geometry import eigendecomposition
+
+# Core engines: module or function imports
+from manifold.core.signal_geometry import compute_signal_geometry
+from manifold.core import signal, state
+
+# Stages import from core, never from other stages
+from manifold.core.geometry_dynamics import compute_geometry_dynamics
+```
 
 ---
 
@@ -264,7 +333,7 @@ observations.parquet + typology.parquet + manifest.yaml  (from Orthon)
 
 **Read MANIFEST_CONTRACT.md for the full specification.**
 
-Quick reference — for each signal, the manifest tells ENGINES:
+Quick reference — for each signal, the manifest tells Manifold:
 - `engines`: which signal-level engines to run
 - `rolling_engines`: which rolling engines to run
 - `window_size`: samples per window (system default)
@@ -274,7 +343,7 @@ Quick reference — for each signal, the manifest tells ENGINES:
 - `eigenvalue_budget`: max eigenvalues to compute
 - `output_hints`: how to format engine output (per_bin vs summary, etc.)
 
-ENGINES executes what the manifest says. No more, no less.
+Manifold executes what the manifest says. No more, no less.
 
 ---
 
@@ -309,8 +378,8 @@ ENGINES executes what the manifest says. No more, no less.
 1. **SEARCH BEFORE CREATE** — find existing code first
 2. **USE EXISTING PATTERNS** — don't reinvent
 3. **NO /tmp** — everything in repo
-4. **NO ONE-OFF RUNNERS** — use established orchestrators
-5. **ENGINES computes, ORTHON classifies** — no labels in ENGINES
+4. **NO ONE-OFF RUNNERS** — use established stages
+5. **MANIFOLD computes, ORTHON classifies** — no labels in MANIFOLD
 6. **state_vector = centroid, state_geometry = eigenvalues** — separate concerns
 7. **Scale-invariant features only** — no absolute values
 8. **I is canonical** — sequential per signal_id
