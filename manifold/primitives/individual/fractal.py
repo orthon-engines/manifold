@@ -9,6 +9,12 @@ from typing import Optional, Tuple
 
 from manifold.primitives.config import PRIMITIVES_CONFIG as cfg
 
+try:
+    from rudder_primitives_rs.individual import hurst_exponent as _hurst_rs
+    _USE_RUST = True
+except ImportError:
+    _USE_RUST = False
+
 
 def hurst_exponent(
     signal: np.ndarray,
@@ -37,6 +43,9 @@ def hurst_exponent(
 
     For financial/natural signals, H > 0.5 indicates long-range dependence.
     """
+    if _USE_RUST and method == 'rs':
+        return _hurst_rs(np.asarray(signal, dtype=np.float64).flatten(), method)
+
     signal = np.asarray(signal).flatten()
     signal = signal[~np.isnan(signal)]
     n = len(signal)
