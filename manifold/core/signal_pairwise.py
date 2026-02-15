@@ -420,8 +420,10 @@ def compute_signal_pairwise(
             high_threshold = pairwise_config['high_correlation_threshold']
 
             print(f"\nCorrelation stats:")
-            print(f"  Mean: {result['correlation'].mean():.3f}")
-            print(f"  Std:  {result['correlation'].std():.3f}")
+            corr_mean = result['correlation'].mean()
+            corr_std = result['correlation'].std()
+            print(f"  Mean: {corr_mean:.3f}" if corr_mean is not None else "  Mean: N/A")
+            print(f"  Std:  {corr_std:.3f}" if corr_std is not None else "  Std:  N/A")
 
             high_corr = (result['correlation'].abs() > high_threshold).sum()
             print(f"  High correlation pairs (|r|>{high_threshold}): {high_corr}")

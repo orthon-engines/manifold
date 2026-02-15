@@ -617,8 +617,8 @@ def compute_signal_dynamics(
         if len(result) > 0:
             mean_dist_vel = result['distance_velocity'].mean()
             mean_coh_vel = result['coherence_velocity'].mean()
-            print(f"\nMean distance velocity: {mean_dist_vel:.4f}")
-            print(f"Mean coherence velocity: {mean_coh_vel:.4f}")
+            print(f"\nMean distance velocity: {mean_dist_vel:.4f}" if mean_dist_vel is not None else "\nMean distance velocity: N/A")
+            print(f"Mean coherence velocity: {mean_coh_vel:.4f}" if mean_coh_vel is not None else "Mean coherence velocity: N/A")
 
     return result
 

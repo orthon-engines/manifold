@@ -384,9 +384,19 @@ def compute_state_geometry(
             engine_data = result.filter(pl.col('engine') == engine_name)
             if len(engine_data) > 0:
                 print(f"\n{engine_name} engine:")
-                print(f"  effective_dim: mean={engine_data['effective_dim'].mean():.2f}, "
-                      f"std={engine_data['effective_dim'].std():.2f}")
-                print(f"  eigenvalue_1: mean={engine_data['eigenvalue_1'].mean():.4f}")
+                dim_mean = engine_data['effective_dim'].mean()
+                dim_std = engine_data['effective_dim'].std()
+                if dim_mean is not None and dim_std is not None:
+                    print(f"  effective_dim: mean={dim_mean:.2f}, std={dim_std:.2f}")
+                elif dim_mean is not None:
+                    print(f"  effective_dim: mean={dim_mean:.2f}")
+                else:
+                    print(f"  effective_dim: no data")
+                ev1_mean = engine_data['eigenvalue_1'].mean()
+                if ev1_mean is not None:
+                    print(f"  eigenvalue_1: mean={ev1_mean:.4f}")
+                else:
+                    print(f"  eigenvalue_1: no data")
 
     return result
 

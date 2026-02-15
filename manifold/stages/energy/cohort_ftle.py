@@ -21,6 +21,7 @@ from pathlib import Path
 from manifold.core.dynamics.ftle import compute as compute_ftle
 from manifold.core.dynamics.formal_definitions import classify_stability
 from manifold.io.writer import write_output
+from manifold.utils import safe_fmt
 
 
 def run(
@@ -172,7 +173,7 @@ def run(
                     (pl.col('direction') == direction) & pl.col('ftle').is_not_null()
                 )
                 if len(subset) > 0:
-                    print(f"  {direction} FTLE: mean={subset['ftle'].mean():.4f}, "
+                    print(f"  {direction} FTLE: mean={safe_fmt(subset['ftle'].mean(), '.4f')}, "
                           f"n={len(subset)}")
 
     return result

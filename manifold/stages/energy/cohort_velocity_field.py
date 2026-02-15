@@ -18,6 +18,7 @@ import polars as pl
 from pathlib import Path
 
 from manifold.io.writer import write_output
+from manifold.utils import safe_fmt
 
 
 def run(
@@ -132,9 +133,9 @@ def run(
     if verbose:
         print(f"Shape: {result.shape}")
         if len(result) > 0:
-            print(f"  Mean speed: {result['speed'].mean():.4f}")
-            print(f"  Mean curvature: {result['curvature'].mean():.4f}")
-            print(f"  Mean motion dimensionality: {result['motion_dimensionality'].mean():.2f}")
+            print(f"  Mean speed: {safe_fmt(result['speed'].mean(), '.4f')}")
+            print(f"  Mean curvature: {safe_fmt(result['curvature'].mean(), '.4f')}")
+            print(f"  Mean motion dimensionality: {safe_fmt(result['motion_dimensionality'].mean(), '.2f')}")
 
     return result
 

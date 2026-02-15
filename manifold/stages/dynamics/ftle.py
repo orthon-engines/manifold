@@ -41,6 +41,7 @@ from typing import Optional
 from manifold.core.dynamics.ftle import compute as compute_ftle
 from manifold.core.dynamics.formal_definitions import classify_stability
 from manifold.io.writer import write_output
+from manifold.utils import safe_fmt
 
 
 def run(
@@ -248,9 +249,9 @@ def run(
             if len(valid) > 0:
                 label = "Backward FTLE" if backward else "Forward FTLE"
                 print(f"\n{label} stats (n={len(valid)}):")
-                print(f"  Mean: {valid['ftle'].mean():.4f}")
-                print(f"  Std:  {valid['ftle'].std():.4f}")
-                print(f"  Range: [{valid['ftle'].min():.4f}, {valid['ftle'].max():.4f}]")
+                print(f"  Mean: {safe_fmt(valid['ftle'].mean(), '.4f')}")
+                print(f"  Std:  {safe_fmt(valid['ftle'].std(), '.4f')}")
+                print(f"  Range: [{safe_fmt(valid['ftle'].min(), '.4f')}, {safe_fmt(valid['ftle'].max(), '.4f')}]")
 
     return result
 
@@ -330,8 +331,8 @@ def run_bidirectional(
             valid = subset.filter(pl.col('ftle').is_not_null())
             if len(valid) > 0:
                 print(f"\n{dir_name.title()} FTLE stats (n={len(valid)}):")
-                print(f"  Mean: {valid['ftle'].mean():.4f}")
-                print(f"  Std:  {valid['ftle'].std():.4f}")
+                print(f"  Mean: {safe_fmt(valid['ftle'].mean(), '.4f')}")
+                print(f"  Std:  {safe_fmt(valid['ftle'].std(), '.4f')}")
 
     return combined
 

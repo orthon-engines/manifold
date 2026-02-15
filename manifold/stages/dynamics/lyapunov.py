@@ -30,6 +30,7 @@ from typing import Optional
 
 from manifold.core.dynamics.lyapunov import compute as compute_lyapunov
 from manifold.io.writer import write_output
+from manifold.utils import safe_fmt
 
 
 def run(
@@ -129,9 +130,9 @@ def run(
             valid = result.filter(pl.col('lyapunov').is_not_null())
             if len(valid) > 0:
                 print(f"\nLyapunov stats (n={len(valid)}):")
-                print(f"  Mean: {valid['lyapunov'].mean():.4f}")
-                print(f"  Std:  {valid['lyapunov'].std():.4f}")
-                print(f"  Range: [{valid['lyapunov'].min():.4f}, {valid['lyapunov'].max():.4f}]")
+                print(f"  Mean: {safe_fmt(valid['lyapunov'].mean(), '.4f')}")
+                print(f"  Std:  {safe_fmt(valid['lyapunov'].std(), '.4f')}")
+                print(f"  Range: [{safe_fmt(valid['lyapunov'].min(), '.4f')}, {safe_fmt(valid['lyapunov'].max(), '.4f')}]")
 
     return result
 

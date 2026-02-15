@@ -21,6 +21,7 @@ from itertools import combinations
 from typing import Optional
 
 from manifold.io.writer import write_output
+from manifold.utils import safe_fmt
 
 
 def run(
@@ -157,7 +158,7 @@ def run(
     if verbose:
         print(f"Shape: {result.shape}")
         if len(result) > 0:
-            print(f"  Mean distance: {result['distance'].mean():.4f}")
+            print(f"  Mean distance: {safe_fmt(result['distance'].mean(), '.4f')}")
             if 'needs_granger' in result.columns:
                 n_granger = result.filter(pl.col('needs_granger') == True).height
                 print(f"  Pairs needing Granger: {n_granger}/{len(result)}")

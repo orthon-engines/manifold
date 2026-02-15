@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 
 from manifold.io.writer import write_output
+from manifold.utils import safe_float
 
 
 def compute_entropy(eigenvalues: np.ndarray) -> float:
@@ -126,8 +127,8 @@ def run(
 
             # Energy proxy: mean effective dimension
             if has_effective_dim:
-                energy = float(cohort_data['effective_dim'].mean())
-                energy_std = float(cohort_data['effective_dim'].std())
+                energy = safe_float(cohort_data['effective_dim'].mean())
+                energy_std = safe_float(cohort_data['effective_dim'].std())
             else:
                 energy = np.nan
                 energy_std = np.nan
@@ -166,8 +167,8 @@ def run(
             entropy = np.nan
 
         if has_effective_dim:
-            energy = float(sg['effective_dim'].mean())
-            energy_std = float(sg['effective_dim'].std())
+            energy = safe_float(sg['effective_dim'].mean())
+            energy_std = safe_float(sg['effective_dim'].std())
             velocities = np.diff(sg['effective_dim'].to_numpy())
             temperature = compute_effective_temperature(velocities)
         else:

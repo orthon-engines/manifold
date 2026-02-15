@@ -29,6 +29,7 @@ from typing import Optional
 
 from manifold.core.dynamics.ftle import compute as compute_ftle
 from manifold.io.writer import write_output
+from manifold.utils import safe_fmt
 
 
 def run(
@@ -175,8 +176,8 @@ def run(
 
         if len(result) > 0:
             print("\nRolling FTLE stats:")
-            print(f"  Mean FTLE: {result['ftle'].mean():.4f}")
-            print(f"  Mean |velocity|: {result['ftle_velocity'].abs().mean():.4f}")
+            print(f"  Mean FTLE: {safe_fmt(result['ftle'].mean(), '.4f')}")
+            print(f"  Mean |velocity|: {safe_fmt(result['ftle_velocity'].abs().mean(), '.4f')}")
 
             # Signals with highest FTLE variance over time (most dynamic stability)
             if 'signal_id' in result.columns:

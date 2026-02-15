@@ -35,6 +35,7 @@ from typing import Dict, Any, List, Tuple, Optional
 from itertools import combinations
 
 from manifold.io.writer import write_output
+from manifold.utils import safe_fmt
 
 try:
     from scipy.spatial import Delaunay
@@ -577,8 +578,8 @@ def run(
             valid = ridge_df.filter(pl.col('ridge_strength').is_not_null())
             if len(valid) > 0:
                 print(f"\nRidge strength stats:")
-                print(f"  Mean: {valid['ridge_strength'].mean():.4f}")
-                print(f"  Max:  {valid['ridge_strength'].max():.4f}")
+                print(f"  Mean: {safe_fmt(valid['ridge_strength'].mean(), '.4f')}")
+                print(f"  Max:  {safe_fmt(valid['ridge_strength'].max(), '.4f')}")
 
     return result
 

@@ -27,6 +27,7 @@ from typing import Optional
 
 from manifold.core.dynamics.persistent_homology import compute
 from manifold.io.writer import write_output
+from manifold.utils import safe_fmt
 
 
 # Columns that are trajectory coordinates (feature dimensions)
@@ -123,11 +124,11 @@ def run(
             b0_valid = df.filter(pl.col('betti_0').is_not_null())
             if len(b0_valid) > 0:
                 print(f"\nTopology summary:")
-                print(f"  b0 range: [{b0_valid['betti_0'].min()}, {b0_valid['betti_0'].max()}]")
+                print(f"  b0 range: [{safe_fmt(b0_valid['betti_0'].min(), 'd')}, {safe_fmt(b0_valid['betti_0'].max(), 'd')}]")
                 if 'betti_1' in df.columns:
                     b1_valid = df.filter(pl.col('betti_1').is_not_null())
                     if len(b1_valid) > 0:
-                        print(f"  b1 range: [{b1_valid['betti_1'].min()}, {b1_valid['betti_1'].max()}]")
+                        print(f"  b1 range: [{safe_fmt(b1_valid['betti_1'].min(), 'd')}, {safe_fmt(b1_valid['betti_1'].max(), 'd')}]")
 
     return df
 

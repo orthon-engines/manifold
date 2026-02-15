@@ -34,6 +34,7 @@ from typing import Optional
 from scipy.signal import savgol_filter
 
 from manifold.io.writer import write_output, write_sidecar
+from manifold.utils import safe_fmt
 
 
 def run(
@@ -228,10 +229,10 @@ def run(
 
         if len(result) > 0:
             print("\nVelocity field stats:")
-            print(f"  Mean speed: {result['speed'].mean():.4f}")
-            print(f"  Max speed:  {result['speed'].max():.4f}")
-            print(f"  Mean curvature: {result['curvature'].mean():.4f}")
-            print(f"  Mean motion dimensionality: {result['motion_dimensionality'].mean():.2f}")
+            print(f"  Mean speed: {safe_fmt(result['speed'].mean(), '.4f')}")
+            print(f"  Max speed:  {safe_fmt(result['speed'].max(), '.4f')}")
+            print(f"  Mean curvature: {safe_fmt(result['curvature'].mean(), '.4f')}")
+            print(f"  Mean motion dimensionality: {safe_fmt(result['motion_dimensionality'].mean(), '.2f')}")
 
             # Most common dominant motion signals
             top_drivers = (

@@ -32,6 +32,7 @@ from typing import List, Dict, Any, Optional
 
 from manifold.core.state.eigendecomp import compute as compute_eigendecomp
 from manifold.io.writer import write_output
+from manifold.utils import safe_fmt
 
 
 def run(
@@ -243,7 +244,7 @@ def run(
                 expanded = valid.filter(pl.col('eff_dim_delta') > 0.5)
                 print(f"  Collapsed (delta < -0.5): {len(collapsed)} cohorts")
                 print(f"  Expanded (delta > 0.5):   {len(expanded)} cohorts")
-                print(f"  Mean delta: {valid['eff_dim_delta'].mean():.3f}")
+                print(f"  Mean delta: {safe_fmt(valid['eff_dim_delta'].mean(), '.3f')}")
 
     return result
 
