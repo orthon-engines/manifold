@@ -20,6 +20,9 @@ Usage:
 """
 
 import argparse
+import copy
+import os
+import time
 import yaml
 from pathlib import Path
 from typing import List, Optional, Dict, Any
@@ -82,6 +85,175 @@ ALL_STAGES = [
     ('geometry.cohort_baseline',         '34'),
     ('geometry.observation_geometry',    '35'),
 ]
+
+# Stage IDs that can run independently per cohort
+COHORT_PARALLEL_IDS = {
+    '00', '01', '02', '03', '05', '06', '07', '08', '08_lyapunov',
+    '09a', '10', '15', '17', '18', '19', '20', '21', '22', '23', '36', '33',
+}
+
+
+# ═══════════════════════════════════════════════════════════════
+# PARALLEL COHORT PROCESSING
+# ═══════════════════════════════════════════════════════════════
+
+def _filter_manifest_for_cohort(manifest: dict, cohort: str) -> dict:
+    """Create a manifest copy with only the specified cohort's signal configs."""
+    filtered = copy.deepcopy(manifest)
+    cohorts_cfg = filtered.get('cohorts', {})
+    if isinstance(cohorts_cfg, dict) and cohort in cohorts_cfg:
+        filtered['cohorts'] = {cohort: cohorts_cfg[cohort]}
+    elif isinstance(cohorts_cfg, dict):
+        filtered['cohorts'] = {}
+    return filtered
+
+
+def _presplit_observations(
+    obs_path: str,
+    output_dir: Path,
+    manifest: dict,
+) -> Optional[dict]:
+    """
+    Split observations by cohort into per-cohort temp directories.
+
+    Returns dict mapping cohort -> {'data_path', 'obs_path', 'output_dir', 'manifest'}
+    or None if parallel execution is not possible.
+    """
+    import polars as pl
+
+    obs = pl.read_parquet(obs_path)
+    if 'cohort' not in obs.columns:
+        return None
+
+    cohorts = sorted(obs['cohort'].unique().to_list())
+    if len(cohorts) < 2:
+        return None
+
+    tmp_dir = output_dir / '_parallel_tmp'
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    cohort_map = {}
+    for cohort in cohorts:
+        cohort_str = str(cohort)
+        cohort_dir = tmp_dir / cohort_str
+        cohort_dir.mkdir(parents=True, exist_ok=True)
+
+        # Write per-cohort observations
+        cohort_obs = obs.filter(pl.col('cohort') == cohort)
+        cohort_obs_path = str(cohort_dir / 'observations.parquet')
+        cohort_obs.write_parquet(cohort_obs_path)
+
+        # Create output subdirectories
+        cohort_output = cohort_dir / 'output'
+        for subdir in set(STAGE_DIRS.values()):
+            (cohort_output / subdir).mkdir(parents=True, exist_ok=True)
+
+        # Filtered manifest
+        cohort_manifest = _filter_manifest_for_cohort(manifest, cohort_str)
+
+        cohort_map[cohort_str] = {
+            'data_path': str(cohort_dir),
+            'obs_path': cohort_obs_path,
+            'output_dir': str(cohort_output),
+            'manifest': cohort_manifest,
+        }
+
+    return cohort_map
+
+
+def _run_cohort_worker(
+    cohort: str,
+    cohort_data_path: str,
+    cohort_obs_path: str,
+    cohort_output_dir: str,
+    manifest: dict,
+    run_stages: list,
+) -> dict:
+    """
+    Run cohort-parallel stages for a single cohort. Top-level for pickling.
+
+    Returns {'cohort': str, 'status': 'ok'|'error', 'error': str|None}
+    """
+    import importlib
+
+    # Limit internal parallelism (signal_vector uses joblib)
+    os.environ['LOKY_MAX_CPU_COUNT'] = '2'
+
+    output_dir = Path(cohort_output_dir)
+
+    for module_path, stage_id in run_stages:
+        if stage_id not in COHORT_PARALLEL_IDS:
+            continue
+        try:
+            module = importlib.import_module(f'manifold.stages.{module_path}')
+            if not hasattr(module, 'run'):
+                continue
+            _dispatch(
+                module, module_path, stage_id,
+                cohort_obs_path, output_dir, manifest,
+                verbose=False,
+                data_path_str=cohort_data_path,
+            )
+        except Exception as e:
+            return {'cohort': cohort, 'status': 'error', 'error': f'{stage_id}: {e}'}
+
+    return {'cohort': cohort, 'status': 'ok', 'error': None}
+
+
+def _merge_cohort_outputs(
+    cohort_map: dict,
+    final_output_dir: Path,
+    verbose: bool = True,
+) -> None:
+    """Concatenate per-cohort parquet outputs into the final output directory."""
+    import polars as pl
+
+    if verbose:
+        print("--- Merging cohort outputs ---")
+
+    merged_count = 0
+
+    for subdir in sorted(set(STAGE_DIRS.values())):
+        final_subdir = final_output_dir / subdir
+
+        # Discover all parquet files across cohort outputs
+        all_files = set()
+        for info in cohort_map.values():
+            cohort_subdir = Path(info['output_dir']) / subdir
+            if cohort_subdir.exists():
+                for f in cohort_subdir.glob('*.parquet'):
+                    all_files.add(f.name)
+
+        for filename in sorted(all_files):
+            parts = []
+            for info in cohort_map.values():
+                part_path = Path(info['output_dir']) / subdir / filename
+                if part_path.exists():
+                    try:
+                        df = pl.read_parquet(str(part_path))
+                        if len(df) > 0:
+                            parts.append(df)
+                    except Exception:
+                        pass
+
+            if parts:
+                merged = pl.concat(parts, how='diagonal_relaxed')
+                merged.write_parquet(str(final_subdir / filename))
+                merged_count += 1
+                if verbose:
+                    print(f"  {subdir}/{filename}: {len(merged)} rows ({len(parts)} cohorts)")
+
+    if verbose:
+        print(f"  Merged {merged_count} files")
+        print()
+
+
+def _cleanup_parallel_tmp(output_dir: Path) -> None:
+    """Remove the _parallel_tmp directory tree."""
+    import shutil
+    tmp_dir = output_dir / '_parallel_tmp'
+    if tmp_dir.exists():
+        shutil.rmtree(tmp_dir)
 
 
 def _out(output_dir: Path, filename: str) -> str:
@@ -151,6 +323,11 @@ def run(
             if sid not in skip
         ]
 
+    # Determine parallelism
+    n_workers = int(os.environ.get('MANIFOLD_WORKERS', '0'))
+    if n_workers == 0:
+        n_workers = max(1, (os.cpu_count() or 2) - 1)
+
     if verbose:
         from manifold.primitives._config import USE_RUST
         print("=" * 70)
@@ -160,33 +337,138 @@ def run(
         print(f"Output:   {output_dir}")
         print(f"Stages:   {len(run_stages)}")
         print(f"Backend:  {'Rust' if USE_RUST else 'Python (MANIFOLD_USE_RUST=0)'}")
+        print(f"Workers:  {n_workers} ({'parallel' if n_workers > 1 else 'sequential'})")
         print()
 
     obs_path = str(data_path / manifest['paths']['observations'])
 
-    # Run each stage
-    for module_path, stage_id in run_stages:
-        stage_label = f"{stage_id} ({module_path.split('.')[-1]})"
-        if verbose:
-            print(f"--- {stage_label} ---")
+    # Try parallel execution
+    cohort_map = None
+    if n_workers > 1:
+        cohort_map = _presplit_observations(obs_path, output_dir, manifest)
 
-        try:
-            module = importlib.import_module(f'manifold.stages.{module_path}')
+    if cohort_map is not None:
+        # ═══ PARALLEL PATH ═══
+        from concurrent.futures import ProcessPoolExecutor, as_completed
 
-            if not hasattr(module, 'run'):
-                if verbose:
-                    print(f"  Warning: {module_path} has no run() function, skipping")
-                continue
-
-            _dispatch(module, module_path, stage_id, obs_path, output_dir, manifest, verbose, str(data_path))
-
-        except Exception as e:
-            if verbose:
-                print(f"  Error in {stage_label}: {e}")
-            raise
+        n_cohorts = len(cohort_map)
+        effective_workers = min(n_workers, n_cohorts)
+        parallel_stages = [(m, s) for m, s in run_stages if s in COHORT_PARALLEL_IDS]
+        fleet_stages_list = [(m, s) for m, s in run_stages if s not in COHORT_PARALLEL_IDS]
 
         if verbose:
+            print(f"Phase 1: {n_cohorts} cohorts x {len(parallel_stages)} stages on {effective_workers} workers")
             print()
+
+        # Phase 1: Parallel per-cohort processing
+        start_time = time.time()
+        completed = 0
+        failed_cohorts = []
+
+        with ProcessPoolExecutor(max_workers=effective_workers) as executor:
+            futures = {}
+            for cohort, info in cohort_map.items():
+                future = executor.submit(
+                    _run_cohort_worker,
+                    cohort=cohort,
+                    cohort_data_path=info['data_path'],
+                    cohort_obs_path=info['obs_path'],
+                    cohort_output_dir=info['output_dir'],
+                    manifest=info['manifest'],
+                    run_stages=parallel_stages,
+                )
+                futures[future] = cohort
+
+            for future in as_completed(futures):
+                cohort = futures[future]
+                completed += 1
+                try:
+                    result = future.result()
+                    elapsed = time.time() - start_time
+                    if result['status'] == 'error':
+                        failed_cohorts.append((cohort, result['error']))
+                        if verbose:
+                            print(f"  [{completed}/{n_cohorts}] {cohort} FAILED: {result['error']} ({elapsed:.1f}s)")
+                    else:
+                        if verbose:
+                            rate = completed / elapsed if elapsed > 0 else 0
+                            eta = (n_cohorts - completed) / rate if rate > 0 else 0
+                            print(f"  [{completed}/{n_cohorts}] {cohort} ({elapsed:.1f}s, {rate:.1f}/s, ETA {eta:.0f}s)")
+                except Exception as e:
+                    failed_cohorts.append((cohort, str(e)))
+                    if verbose:
+                        print(f"  [{completed}/{n_cohorts}] {cohort} FAILED: {e}")
+
+        if failed_cohorts and verbose:
+            print(f"\n  WARNING: {len(failed_cohorts)} cohort(s) failed:")
+            for c, err in failed_cohorts:
+                print(f"    {c}: {err}")
+            print()
+
+        if verbose:
+            elapsed = time.time() - start_time
+            print(f"  Phase 1 complete: {completed - len(failed_cohorts)}/{n_cohorts} cohorts in {elapsed:.1f}s")
+            print()
+
+        # Phase 2: Merge per-cohort outputs
+        _merge_cohort_outputs(cohort_map, output_dir, verbose=verbose)
+
+        # Phase 3: Fleet + cross-cohort stages (sequential)
+        if fleet_stages_list:
+            if verbose:
+                print(f"Phase 3: {len(fleet_stages_list)} fleet/cross-cohort stages (sequential)")
+                print()
+
+            for module_path, stage_id in fleet_stages_list:
+                stage_label = f"{stage_id} ({module_path.split('.')[-1]})"
+                if verbose:
+                    print(f"--- {stage_label} ---")
+
+                try:
+                    module = importlib.import_module(f'manifold.stages.{module_path}')
+
+                    if not hasattr(module, 'run'):
+                        if verbose:
+                            print(f"  Warning: {module_path} has no run() function, skipping")
+                        continue
+
+                    _dispatch(module, module_path, stage_id, obs_path, output_dir, manifest, verbose, str(data_path))
+
+                except Exception as e:
+                    if verbose:
+                        print(f"  Error in {stage_label}: {e}")
+                    raise
+
+                if verbose:
+                    print()
+
+        # Cleanup temp files
+        _cleanup_parallel_tmp(output_dir)
+
+    else:
+        # ═══ SEQUENTIAL PATH (existing behavior) ═══
+        for module_path, stage_id in run_stages:
+            stage_label = f"{stage_id} ({module_path.split('.')[-1]})"
+            if verbose:
+                print(f"--- {stage_label} ---")
+
+            try:
+                module = importlib.import_module(f'manifold.stages.{module_path}')
+
+                if not hasattr(module, 'run'):
+                    if verbose:
+                        print(f"  Warning: {module_path} has no run() function, skipping")
+                    continue
+
+                _dispatch(module, module_path, stage_id, obs_path, output_dir, manifest, verbose, str(data_path))
+
+            except Exception as e:
+                if verbose:
+                    print(f"  Error in {stage_label}: {e}")
+                raise
+
+            if verbose:
+                print()
 
     if verbose:
         # Report output
