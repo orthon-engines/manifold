@@ -4,6 +4,8 @@ SNR (Signal-to-Noise Ratio) Engine.
 Quantifies signal vs noise content.
 """
 
+import warnings
+
 import numpy as np
 from typing import Dict
 
@@ -78,7 +80,9 @@ def compute(y: np.ndarray) -> Dict[str, float]:
             'noise_power': noise_power,
         }
 
-    except Exception:
+    except ValueError:
         pass
+    except Exception as e:
+        warnings.warn(f"snr.compute: {type(e).__name__}: {e}", RuntimeWarning, stacklevel=2)
 
     return result

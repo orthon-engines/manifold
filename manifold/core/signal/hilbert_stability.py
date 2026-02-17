@@ -10,6 +10,8 @@ Hilbert measures frequency stability (needs only the signal).
 Both answer "how stable is this signal?" but Hilbert works everywhere.
 """
 
+import warnings
+
 import numpy as np
 from manifold.primitives.individual.hilbert import (
     instantaneous_frequency,
@@ -122,7 +124,9 @@ def compute(y: np.ndarray, fs: float = 1.0) -> dict:
         if freq_variation > 1e-10:
             result['am_fm_ratio'] = float(amp_variation / freq_variation)
 
-    except Exception:
+    except ValueError:
         pass
+    except Exception as e:
+        warnings.warn(f"hilbert_stability.compute: {type(e).__name__}: {e}", RuntimeWarning, stacklevel=2)
 
     return result

@@ -4,6 +4,8 @@ Phase Coherence Engine.
 Measures phase stability across time using Hilbert transform.
 """
 
+import warnings
+
 import numpy as np
 from typing import Dict
 
@@ -105,10 +107,14 @@ def compute(y: np.ndarray, n_segments: int = 4) -> Dict[str, float]:
                 'coherence_std': np.nan,
                 'coherence_trend': np.nan,
             }
-        except Exception:
+        except ValueError:
             pass
+        except Exception as e:
+            warnings.warn(f"phase_coherence.compute (fallback): {type(e).__name__}: {e}", RuntimeWarning, stacklevel=2)
 
-    except Exception:
+    except ValueError:
         pass
+    except Exception as e:
+        warnings.warn(f"phase_coherence.compute: {type(e).__name__}: {e}", RuntimeWarning, stacklevel=2)
 
     return result

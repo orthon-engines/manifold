@@ -4,6 +4,8 @@ THD (Total Harmonic Distortion) Engine.
 Measures harmonic distortion (purity of periodic signal).
 """
 
+import warnings
+
 import numpy as np
 from typing import Dict
 
@@ -95,7 +97,9 @@ def compute(y: np.ndarray, n_harmonics: int = 5) -> Dict[str, float]:
             'n_harmonics_found': harmonics_found,
         }
 
-    except Exception:
+    except ValueError:
         pass
+    except Exception as e:
+        warnings.warn(f"thd.compute: {type(e).__name__}: {e}", RuntimeWarning, stacklevel=2)
 
     return result

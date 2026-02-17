@@ -4,6 +4,8 @@ Fundamental Frequency Engine.
 Detects lowest dominant frequency (base rhythm of signal).
 """
 
+import warnings
+
 import numpy as np
 from typing import Dict
 
@@ -94,7 +96,9 @@ def compute(y: np.ndarray) -> Dict[str, float]:
             'fundamental_confidence': confidence,
         }
 
-    except Exception:
+    except (ValueError, IndexError):
         pass
+    except Exception as e:
+        warnings.warn(f"fundamental_freq.compute: {type(e).__name__}: {e}", RuntimeWarning, stacklevel=2)
 
     return result

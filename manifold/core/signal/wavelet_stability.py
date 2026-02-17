@@ -10,6 +10,8 @@ Wavelet captures INTRA-signal structure (frequency content).
 They're orthogonal views — one can't replace the other.
 """
 
+import warnings
+
 import numpy as np
 import pywt
 
@@ -129,7 +131,9 @@ def compute(y: np.ndarray, fs: float = 1.0, n_scales: int = 16) -> dict:
                     np.mean(((flat_coeffs - m) / s) ** 4) - 3.0
                 )
 
-    except Exception:
+    except ValueError:
         pass
+    except Exception as e:
+        warnings.warn(f"wavelet_stability.compute: {type(e).__name__}: {e}", RuntimeWarning, stacklevel=2)
 
     return result
