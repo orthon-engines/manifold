@@ -66,9 +66,6 @@ from manifold.core.signal_pairwise import compute_signal_pairwise
 
 from manifold.core.geometry_dynamics import (
     compute_geometry_dynamics,
-    compute_signal_dynamics,
-    compute_pairwise_dynamics,
-    compute_all_dynamics,
     compute_derivatives,
 )
 
@@ -101,8 +98,5 @@ __all__ = [
     'compute_signal_geometry',
     'compute_signal_pairwise',
     'compute_geometry_dynamics',
-    'compute_signal_dynamics',
-    'compute_pairwise_dynamics',
-    'compute_all_dynamics',
     'compute_derivatives',
 ]
