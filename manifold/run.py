@@ -24,10 +24,10 @@ import copy
 import os
 import shutil
 import time
-import yaml
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
+from manifold.io.manifest import load_manifest
 from manifold.io.reader import STAGE_DIRS
 
 
@@ -303,13 +303,10 @@ def run(
     if not manifest_path.exists():
         raise FileNotFoundError(f"manifest not found: {manifest_path}")
 
-    with open(manifest_path) as f:
-        manifest = yaml.safe_load(f)
+    manifest = load_manifest(str(manifest_path))
 
     # data_path = parent of output_dir (writer resolves data_path / 'output')
     data_path = output_dir.parent
-
-    manifest['_manifest_path'] = str(manifest_path)
     manifest['_data_dir'] = str(data_path)
 
     # Safety: refuse to wipe if this looks like a domain root
@@ -1006,8 +1003,7 @@ Usage:
     if not manifest_path.exists():
         raise FileNotFoundError(f"No manifest.yaml in {data_path}")
 
-    with open(manifest_path) as f:
-        manifest = yaml.safe_load(f)
+    manifest = load_manifest(str(manifest_path))
 
     obs_rel = manifest.get('paths', {}).get('observations', 'observations.parquet')
     out_rel = manifest.get('paths', {}).get('output_dir', 'output')
