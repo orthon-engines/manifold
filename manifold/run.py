@@ -67,6 +67,7 @@ def validate_manifest_paths(manifest: dict) -> list[str]:
 # (module_path, stage_id) — module_path relative to manifold.stages
 ALL_STAGES = [
     # signal/ + cohort/ (core geometry)
+    ('vector.typology_vector',           '00a'),
     ('vector.breaks',                    '00'),
     ('vector.signal_vector',             '01'),
     ('geometry.state_vector',            '02'),
@@ -114,7 +115,7 @@ SYSTEM_STAGE_IDS = {'25', '26', '27', '28', '30', '31', '32'}
 SYSTEM_SUBDIRS = {'system', 'system/system_dynamics'}
 
 # Stages that must run globally before parallel split (column pruning is cross-cohort)
-GLOBAL_FIRST_IDS = {'00', '01'}
+GLOBAL_FIRST_IDS = {'00', '00a', '01'}
 
 # Stage IDs that can run independently per cohort (after global stages)
 COHORT_PARALLEL_IDS = {
@@ -544,6 +545,20 @@ def run(
                 br_dest.parent.mkdir(parents=True, exist_ok=True)
                 br_cohort.write_parquet(str(br_dest))
 
+        tv_path = _out(output_dir, 'typology_vector.parquet')
+        if Path(tv_path).exists():
+            tv_all = pl.read_parquet(tv_path)
+            has_tv_cohort = 'cohort' in tv_all.columns
+            for cohort, info in cohort_map.items():
+                cohort_output = Path(info['output_dir'])
+                if has_tv_cohort:
+                    tv_cohort = tv_all.filter(pl.col('cohort') == cohort)
+                else:
+                    tv_cohort = tv_all
+                tv_dest = cohort_output / STAGE_DIRS.get('typology_vector', '') / 'typology_vector.parquet'
+                tv_dest.parent.mkdir(parents=True, exist_ok=True)
+                tv_cohort.write_parquet(str(tv_dest))
+
         if verbose:
             print(f"Phase 1: {n_cohorts} cohorts x {len(parallel_stages)} stages on {effective_workers} workers")
             print()
@@ -695,7 +710,10 @@ def _dispatch(
 
     # ── vector ──
 
-    if stage_name == 'breaks':
+    if stage_name == 'typology_vector':
+        module.run(obs_path, data_path=data_path_str, manifest=manifest, verbose=verbose)
+
+    elif stage_name == 'breaks':
         module.run(obs_path, data_path=data_path_str, verbose=verbose)
 
     elif stage_name == 'signal_vector':

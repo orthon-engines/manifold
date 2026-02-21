@@ -440,6 +440,61 @@ def _audit_manifest_engines(
     }
 
 
+def load_typology_vector(data_path: str) -> Optional[pl.DataFrame]:
+    """Load typology_vector.parquet from data_path via reader.
+
+    Returns None if not found (backward compat: no gating applied).
+    """
+    from manifold.io.reader import load_output
+    return load_output(data_path, 'typology_vector')
+
+
+def evaluate_engine_gates(
+    engine_gates: Dict[str, Any],
+    typology_row: Dict[str, Any],
+) -> Set[str]:
+    """Evaluate engine gate conditions against a typology row.
+
+    Args:
+        engine_gates: Dict from manifest, e.g.:
+            {'spectral': {'skip_when': {'spectral_flatness': {'gt': 0.5}}}, ...}
+        typology_row: Dict of metric values for this window.
+
+    Returns:
+        Set of engine names to skip for this window.
+    """
+    if not engine_gates or engine_gates.get('_force_all', False):
+        return set()
+
+    skip = set()
+    for engine_name, conditions in engine_gates.items():
+        if engine_name.startswith('_'):
+            continue
+        if not isinstance(conditions, dict):
+            continue
+        skip_when = conditions.get('skip_when', {})
+        should_skip = False
+        for metric, bounds in skip_when.items():
+            val = typology_row.get(metric)
+            if val is None or (isinstance(val, float) and np.isnan(val)):
+                continue
+            if 'gt' in bounds and val > bounds['gt']:
+                should_skip = True
+                break
+            if 'lt' in bounds and val < bounds['lt']:
+                should_skip = True
+                break
+            if 'min_n_obs' in bounds:
+                n_obs = typology_row.get('n_obs', 0)
+                if n_obs < bounds['min_n_obs']:
+                    should_skip = True
+                    break
+        if should_skip:
+            skip.add(engine_name)
+
+    return skip
+
+
 def load_window_factors(typology_path: Path) -> Dict[str, float]:
     """
     Load window_factor from typology.parquet.
@@ -473,6 +528,8 @@ def _compute_single_signal(
     system_stride: int,
     window_factor: float = 1.0,
     cohort: str = None,
+    typology_windows: List[Dict[str, Any]] = None,
+    engine_gates: Dict[str, Any] = None,
 ) -> List[Dict[str, Any]]:
     """
     Compute all windows for one signal.
@@ -488,6 +545,9 @@ def _compute_single_signal(
         system_stride: System stride
         window_factor: Signal-specific window multiplier from typology
         cohort: Cohort/unit identifier (passed through for grouping)
+        typology_windows: List of typology row dicts for this signal's windows
+                          (aligned by window_id). None = no gating.
+        engine_gates: Engine gate config from manifest. None = no gating.
 
     Returns:
         List of row dicts for this signal
@@ -501,7 +561,12 @@ def _compute_single_signal(
     # Group engines by window requirement (using window_factor)
     engine_groups = group_engines_by_window(engines, overrides, system_window, window_factor)
 
+    # Build engine→bit index mapping for engine_mask
+    all_engines_sorted = sorted(set(engines))
+    engine_bit_index = {e: i for i, e in enumerate(all_engines_sorted)}
+
     rows = []
+    window_idx = 0
 
     # Compute windows at system stride
     for window_end in range(system_window - 1, len(signal_data), system_stride):
@@ -515,6 +580,18 @@ def _compute_single_signal(
         # Always include cohort (downstream stages group by it)
         row['cohort'] = cohort if cohort is not None else ''
 
+        # Determine which engines to skip via typology gating
+        skip_engines = set()
+        if typology_windows and engine_gates and window_idx < len(typology_windows):
+            skip_engines = evaluate_engine_gates(engine_gates, typology_windows[window_idx])
+
+        # Build engine_mask: bitmask where bit i = 1 means engine i ran
+        engine_mask = 0
+        for e in all_engines_sorted:
+            if e not in skip_engines:
+                engine_mask |= (1 << engine_bit_index[e])
+        row['engine_mask'] = engine_mask
+
         # Run each engine group with appropriate window
         for window_size, engine_list in engine_groups.items():
             eng_start = max(0, window_end - window_size + 1)
@@ -522,6 +599,11 @@ def _compute_single_signal(
             actual_available = len(window_data)
 
             for engine in engine_list:
+                # Skip gated engines
+                if engine in skip_engines:
+                    row.update(null_output_for_engine(engine))
+                    continue
+
                 min_required = get_engine_min_samples(engine)
                 # Relaxed engines gate on min_required (math floor).
                 # Others gate on window_size (alignment requirement).
@@ -538,6 +620,7 @@ def _compute_single_signal(
                     row.update(null_output_for_engine(engine))
 
         rows.append(row)
+        window_idx += 1
 
     return rows
 
@@ -546,17 +629,19 @@ def _prepare_signal_tasks(
     observations: pl.DataFrame,
     manifest: Dict[str, Any],
     window_factors: Dict[str, float] = None,
-) -> List[Tuple[str, np.ndarray, np.ndarray, Dict[str, Any], float, str]]:
+    typology_vector_df: Optional[pl.DataFrame] = None,
+) -> List[Tuple[str, np.ndarray, np.ndarray, Dict[str, Any], float, str, Optional[List[Dict[str, Any]]]]]:
     """
-    Prepare (signal_id, signal_data, signal_0_data, signal_config, window_factor, cohort) tuples for parallel dispatch.
+    Prepare task tuples for parallel dispatch.
 
     Args:
         observations: Observations DataFrame
         manifest: Manifest dict
         window_factors: Dict mapping signal_id to window_factor (from typology)
+        typology_vector_df: Optional typology_vector DataFrame for engine gating
 
     Returns:
-        List of (signal_id, signal_data, signal_0_data, signal_config, window_factor, cohort) tuples
+        List of (signal_id, signal_data, signal_0_data, signal_config, window_factor, cohort, typology_windows) tuples
     """
     if window_factors is None:
         window_factors = {}
@@ -595,7 +680,17 @@ def _prepare_signal_tasks(
             # Get window factor for this signal (default 1.0)
             factor = window_factors.get(signal_id, 1.0)
 
-            tasks.append((signal_id, signal_data, signal_0_data, signal_config, factor, cohort_name))
+            # Extract typology windows for this signal+cohort (sorted by window_id)
+            typo_windows = None
+            if typology_vector_df is not None:
+                sig_filter = pl.col('signal_id') == signal_id
+                if 'cohort' in typology_vector_df.columns:
+                    sig_filter = sig_filter & (pl.col('cohort') == cohort_name)
+                tv_rows = typology_vector_df.filter(sig_filter).sort('window_id')
+                if tv_rows.height > 0:
+                    typo_windows = tv_rows.to_dicts()
+
+            tasks.append((signal_id, signal_data, signal_0_data, signal_config, factor, cohort_name, typo_windows))
 
     return tasks
 
@@ -608,6 +703,8 @@ def compute_signal_vector(
     output_path: str = None,
     flush_interval: int = 1000,
     window_factors: Dict[str, float] = None,
+    typology_vector_df: Optional[pl.DataFrame] = None,
+    engine_gates: Dict[str, Any] = None,
 ) -> pl.DataFrame:
     """
     Compute signal vector with per-engine window support.
@@ -623,6 +720,8 @@ def compute_signal_vector(
         output_path: Path to write output (enables streaming mode)
         flush_interval: Flush to disk every N windows (ignored in parallel mode)
         window_factors: Dict mapping signal_id to window_factor (from typology)
+        typology_vector_df: Optional typology_vector DataFrame for engine gating
+        engine_gates: Engine gate config from manifest
 
     Returns:
         DataFrame with computed features per signal per window
@@ -632,35 +731,39 @@ def compute_signal_vector(
     system_window = manifest['system']['window']
     system_stride = manifest['system']['stride']
 
-    # Prepare signal tasks (now includes window_factor)
-    tasks = _prepare_signal_tasks(observations, manifest, window_factors)
+    # Prepare signal tasks (now includes window_factor and typology_windows)
+    tasks = _prepare_signal_tasks(observations, manifest, window_factors, typology_vector_df)
 
     if not tasks:
         return pl.DataFrame()
 
     # Count total windows for progress
     total_windows = 0
-    for signal_id, signal_data, signal_0_data, signal_config, factor, cohort in tasks:
+    for signal_id, signal_data, signal_0_data, signal_config, factor, cohort, _tw in tasks:
         n_windows = max(0, (len(signal_data) - system_window) // system_stride + 1)
         total_windows += n_windows
 
     if verbose:
         print(f"Processing {total_windows:,} windows across {len(tasks)} signals using {_N_WORKERS} workers...")
+        if engine_gates and not engine_gates.get('_force_all', False):
+            print(f"  Engine gating: {len(engine_gates) - sum(1 for k in engine_gates if k.startswith('_'))} gate rules active")
         sys.stdout.flush()
 
     if len(tasks) == 1:
         # Single signal - no parallelism overhead
-        signal_id, signal_data, signal_0_data, signal_config, factor, cohort = tasks[0]
+        signal_id, signal_data, signal_0_data, signal_config, factor, cohort, typo_windows = tasks[0]
         all_rows = _compute_single_signal(
-            signal_id, signal_data, signal_0_data, signal_config, system_window, system_stride, factor, cohort
+            signal_id, signal_data, signal_0_data, signal_config, system_window, system_stride, factor, cohort,
+            typology_windows=typo_windows, engine_gates=engine_gates,
         )
     else:
         # Parallel across signals - always
         results = Parallel(n_jobs=_N_WORKERS, prefer="processes")(
             delayed(_compute_single_signal)(
-                signal_id, signal_data, signal_0_data, signal_config, system_window, system_stride, factor, cohort
+                signal_id, signal_data, signal_0_data, signal_config, system_window, system_stride, factor, cohort,
+                typo_windows, engine_gates,
             )
-            for signal_id, signal_data, signal_0_data, signal_config, factor, cohort in tasks
+            for signal_id, signal_data, signal_0_data, signal_config, factor, cohort, typo_windows in tasks
         )
 
         # Flatten results
@@ -724,6 +827,15 @@ def run(
         if verbose and window_factors:
             print(f"Loaded window_factors for {len(window_factors)} signals")
 
+    # Load typology_vector for engine gating (backward compat: None if not found)
+    typology_vector_df = load_typology_vector(data_path)
+    engine_gates = manifest.get('engine_gates') if manifest else None
+    if verbose:
+        if typology_vector_df is not None:
+            print(f"Loaded typology_vector: {typology_vector_df.height} rows for engine gating")
+        else:
+            print("No typology_vector found — engine gating disabled")
+
     # Load observations
     obs = pl.read_parquet(observations_path)
 
@@ -752,7 +864,9 @@ def run(
     # Compute signal vector using core function
     df = compute_signal_vector(
         obs, manifest, verbose=verbose,
-        window_factors=window_factors
+        window_factors=window_factors,
+        typology_vector_df=typology_vector_df,
+        engine_gates=engine_gates,
     )
 
     # Replace infinities with null in all float columns

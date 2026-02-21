@@ -12,6 +12,7 @@ from typing import Optional
 # Output directory mapping (28 files -> 6 directories)
 STAGE_DIRS = {
     # signal/ — per-signal features
+    'typology_vector':            'signal',
     'signal_vector':              'signal',
     'signal_geometry':            'signal',
     'signal_stability':           'signal',
