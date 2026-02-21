@@ -2,16 +2,25 @@
 Stage 00a: Typology Vector
 ===========================
 
-Per-window typology metrics computed at system window/stride alignment.
-Runs BEFORE signal_vector (Stage 01) so engine gating can use local character.
+Compute typology metrics per window per signal.
+Summarize whether they vary.
+Output as data. That's it.
 
-11 metrics per window per signal:
+Downstream layers decide what to do with this information.
+This stage only measures.
+
+Output:
+  1. typology_windows.parquet — per-window metrics (signal/ directory)
+  2. typology_vector.parquet  — per-signal summary  (signal/ directory)
+
+11 metrics per window:
   hurst, perm_entropy, sample_entropy, lyapunov_proxy,
   spectral_flatness, kurtosis, cv, mean_abs_diff,
   range_norm, zero_crossing_rate, trend_strength
 
-Uses pmtvs via manifold.core._pmtvs (same compat layer as signal_vector).
-Writes typology_vector.parquet to signal/ subdirectory.
+pmtvs is a performance upgrade, not a dependency.
+When pmtvs is installed: Rust-accelerated primitives.
+When it's not: numpy/scipy fallbacks (slower, mathematically equivalent).
 """
 
 import numpy as np
@@ -20,154 +29,231 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional
 
 from joblib import Parallel, delayed
+from scipy.stats import kurtosis as sp_kurtosis
 
-from manifold.core._pmtvs import (
-    hurst_exponent,
-    permutation_entropy,
-    sample_entropy,
-    lyapunov_rosenstein,
-)
 from manifold.io.writer import write_output
+
+
+# ── pmtvs: optional accelerator ─────────────────────────────────
+
+try:
+    from manifold.core._pmtvs import (
+        hurst_exponent as _pmtvs_hurst,
+        permutation_entropy as _pmtvs_perm_entropy,
+        sample_entropy as _pmtvs_sample_entropy,
+        lyapunov_rosenstein as _pmtvs_lyapunov,
+    )
+    _HAS_PMTVS = True
+except ImportError:
+    _HAS_PMTVS = False
 
 
 # Match signal_vector worker count
 _N_WORKERS = 2
 
-# Minimum observations per window for meaningful metrics
-_MIN_OBS = 20
-
-# Std threshold below which a window is considered constant
-_CONSTANT_STD = 1e-10
+# CV threshold for "varies" — default, Prime can override
+_CV_THRESHOLD = 0.10
 
 
-def _compute_window_metrics(window_data: np.ndarray) -> Dict[str, float]:
-    """Compute 11 typology metrics for a single window.
+# ── Metric functions (pmtvs + fallback) ─────────────────────────
 
-    Args:
-        window_data: 1D numpy array of signal values in the window.
+def _hurst(x: np.ndarray) -> float:
+    if _HAS_PMTVS:
+        try:
+            return float(_pmtvs_hurst(x))
+        except Exception:
+            pass
+    # R/S fallback
+    n = len(x)
+    if n < 20:
+        return np.nan
+    max_k = min(n // 2, 100)
+    if max_k < 10:
+        return np.nan
+    rs_values = []
+    for k in range(10, max_k + 1, max(1, (max_k - 10) // 10)):
+        n_chunks = n // k
+        if n_chunks < 1:
+            continue
+        rs_list = []
+        for i in range(n_chunks):
+            chunk = x[i * k:(i + 1) * k]
+            mean_c = np.mean(chunk)
+            y = np.cumsum(chunk - mean_c)
+            r = np.max(y) - np.min(y)
+            s = np.std(chunk, ddof=1)
+            if s > 1e-10:
+                rs_list.append(r / s)
+        if rs_list:
+            rs_values.append((np.log(k), np.log(np.mean(rs_list))))
+    if len(rs_values) < 3:
+        return np.nan
+    logs = np.array(rs_values)
+    coeffs = np.polyfit(logs[:, 0], logs[:, 1], 1)
+    return float(np.clip(coeffs[0], 0.0, 1.0))
 
-    Returns:
-        Dict of metric_name -> float (NaN on failure).
-    """
-    n = len(window_data)
-    std = np.std(window_data)
 
-    # Guard: too few obs or near-constant
-    if n < _MIN_OBS or std < _CONSTANT_STD:
-        return {
-            'hurst': float('nan'),
-            'perm_entropy': float('nan'),
-            'sample_entropy': float('nan'),
-            'lyapunov_proxy': float('nan'),
-            'spectral_flatness': float('nan'),
-            'kurtosis': float('nan'),
-            'cv': float('nan'),
-            'mean_abs_diff': float('nan'),
-            'range_norm': float('nan'),
-            'zero_crossing_rate': float('nan'),
-            'trend_strength': float('nan'),
-        }
+def _perm_entropy(x: np.ndarray, order: int = 3) -> float:
+    if _HAS_PMTVS:
+        try:
+            return float(_pmtvs_perm_entropy(x, order=order))
+        except Exception:
+            pass
+    n = len(x)
+    if n < order + 1:
+        return np.nan
+    from math import factorial
+    max_perms = factorial(order)
+    counts = {}
+    for i in range(n - order):
+        pattern = tuple(np.argsort(x[i:i + order]))
+        counts[pattern] = counts.get(pattern, 0) + 1
+    total = sum(counts.values())
+    probs = np.array([c / total for c in counts.values()])
+    h = -np.sum(probs * np.log2(probs + 1e-12))
+    return float(h / np.log2(max_perms))
 
-    metrics = {}
 
-    # --- pmtvs metrics (try/except → NaN on failure) ---
+def _sample_entropy(x: np.ndarray, m: int = 2, r_mult: float = 0.2) -> float:
+    if _HAS_PMTVS:
+        try:
+            return float(_pmtvs_sample_entropy(x, m=m))
+        except Exception:
+            pass
+    n = len(x)
+    if n < m + 2:
+        return np.nan
+    r = r_mult * np.std(x, ddof=1)
+    if r < 1e-10:
+        return np.nan
 
-    try:
-        metrics['hurst'] = float(hurst_exponent(window_data))
-    except Exception:
-        metrics['hurst'] = float('nan')
+    def _count_matches(length):
+        templates = np.array([x[i:i + length] for i in range(n - length)])
+        count = 0
+        for i in range(len(templates)):
+            for j in range(i + 1, len(templates)):
+                if np.max(np.abs(templates[i] - templates[j])) <= r:
+                    count += 1
+        return count
 
-    try:
-        metrics['perm_entropy'] = float(permutation_entropy(window_data))
-    except Exception:
-        metrics['perm_entropy'] = float('nan')
+    a = _count_matches(m)
+    b = _count_matches(m + 1)
+    if a == 0:
+        return np.nan
+    return float(-np.log(b / a)) if b > 0 else np.nan
 
-    try:
-        metrics['sample_entropy'] = float(sample_entropy(window_data))
-    except Exception:
-        metrics['sample_entropy'] = float('nan')
 
-    try:
-        result = lyapunov_rosenstein(window_data)
-        # lyapunov_rosenstein returns (exponent, divergence_curve, lags) tuple
-        if isinstance(result, tuple):
-            metrics['lyapunov_proxy'] = float(result[0])
-        else:
-            metrics['lyapunov_proxy'] = float(result)
-    except Exception:
-        metrics['lyapunov_proxy'] = float('nan')
+def _lyapunov_proxy(x: np.ndarray) -> float:
+    if _HAS_PMTVS:
+        try:
+            result = _pmtvs_lyapunov(x)
+            # lyapunov_rosenstein returns (exponent, divergence_curve, lags) tuple
+            if isinstance(result, tuple):
+                return float(result[0])
+            return float(result)
+        except Exception:
+            pass
+    # Fallback: average log divergence of nearest neighbors
+    n = len(x)
+    if n < 50:
+        return np.nan
+    diffs = np.abs(np.diff(x))
+    diffs = diffs[diffs > 1e-12]
+    if len(diffs) < 10:
+        return 0.0
+    return float(np.mean(np.log(diffs + 1e-12)) - np.log(1e-12))
 
-    # --- numpy-based metrics ---
 
-    # spectral_flatness: geometric mean / arithmetic mean of PSD
-    try:
-        from numpy.fft import rfft
-        fft_vals = np.abs(rfft(window_data - np.mean(window_data)))[1:]  # skip DC
-        psd = fft_vals ** 2
-        if len(psd) > 0 and np.all(psd >= 0):
-            psd_pos = psd[psd > 0]
-            if len(psd_pos) > 0:
-                geo_mean = np.exp(np.mean(np.log(psd_pos)))
-                arith_mean = np.mean(psd)
-                metrics['spectral_flatness'] = float(geo_mean / arith_mean) if arith_mean > 0 else float('nan')
-            else:
-                metrics['spectral_flatness'] = float('nan')
-        else:
-            metrics['spectral_flatness'] = float('nan')
-    except Exception:
-        metrics['spectral_flatness'] = float('nan')
+def _spectral_flatness(x: np.ndarray) -> float:
+    ps = np.abs(np.fft.rfft(x - np.mean(x))) ** 2
+    ps = ps[1:]  # drop DC
+    if len(ps) == 0 or np.max(ps) < 1e-20:
+        return 0.0
+    geo = np.exp(np.mean(np.log(ps + 1e-20)))
+    arith = np.mean(ps)
+    if arith < 1e-20:
+        return 0.0
+    return float(np.clip(geo / arith, 0.0, 1.0))
 
-    # kurtosis (excess)
-    try:
-        mean = np.mean(window_data)
-        m4 = np.mean((window_data - mean) ** 4)
-        m2 = np.mean((window_data - mean) ** 2)
-        metrics['kurtosis'] = float(m4 / (m2 ** 2) - 3.0) if m2 > 0 else float('nan')
-    except Exception:
-        metrics['kurtosis'] = float('nan')
 
-    # cv (coefficient of variation)
-    try:
-        mean = np.mean(window_data)
-        metrics['cv'] = float(std / abs(mean)) if abs(mean) > _CONSTANT_STD else float('nan')
-    except Exception:
-        metrics['cv'] = float('nan')
+def _kurtosis(x: np.ndarray) -> float:
+    if len(x) < 4:
+        return np.nan
+    return float(sp_kurtosis(x, fisher=True))
 
-    # mean_abs_diff (average |x[i+1] - x[i]|)
-    try:
-        diffs = np.abs(np.diff(window_data))
-        metrics['mean_abs_diff'] = float(np.mean(diffs))
-    except Exception:
-        metrics['mean_abs_diff'] = float('nan')
 
-    # range_norm (range / std)
-    try:
-        r = float(np.max(window_data) - np.min(window_data))
-        metrics['range_norm'] = r / std if std > _CONSTANT_STD else float('nan')
-    except Exception:
-        metrics['range_norm'] = float('nan')
+def _cv(x: np.ndarray) -> float:
+    mu = np.mean(x)
+    if abs(mu) < 1e-10:
+        return float(np.std(x, ddof=1))
+    return float(np.std(x, ddof=1) / abs(mu))
 
-    # zero_crossing_rate
-    try:
-        centered = window_data - np.mean(window_data)
-        crossings = np.sum(np.abs(np.diff(np.sign(centered))) > 0)
-        metrics['zero_crossing_rate'] = float(crossings / (n - 1))
-    except Exception:
-        metrics['zero_crossing_rate'] = float('nan')
 
-    # trend_strength: 1 - (var(residuals) / var(signal))
-    try:
-        x = np.arange(n, dtype=np.float64)
-        coeffs = np.polyfit(x, window_data, 1)
-        fitted = np.polyval(coeffs, x)
-        residuals = window_data - fitted
-        var_signal = np.var(window_data)
-        var_resid = np.var(residuals)
-        metrics['trend_strength'] = max(0.0, float(1.0 - var_resid / var_signal)) if var_signal > 0 else 0.0
-    except Exception:
-        metrics['trend_strength'] = float('nan')
+def _range_norm(x: np.ndarray) -> float:
+    r = np.max(x) - np.min(x)
+    s = np.std(x, ddof=1)
+    if s < 1e-10:
+        return 0.0
+    return float(r / s)
 
-    return metrics
+
+def _zero_crossing_rate(x: np.ndarray) -> float:
+    if len(x) < 2:
+        return np.nan
+    centered = x - np.mean(x)
+    crossings = np.sum(np.abs(np.diff(np.sign(centered))) > 0)
+    return float(crossings / (len(x) - 1))
+
+
+def _trend_strength(x: np.ndarray) -> float:
+    n = len(x)
+    if n < 3:
+        return np.nan
+    t = np.arange(n, dtype=float)
+    coeffs = np.polyfit(t, x, 1)
+    fitted = np.polyval(coeffs, t)
+    ss_res = np.sum((x - fitted) ** 2)
+    ss_tot = np.sum((x - np.mean(x)) ** 2)
+    if ss_tot < 1e-20:
+        return 0.0
+    return float(np.clip(1.0 - ss_res / ss_tot, 0.0, 1.0))
+
+
+def _mean_abs_diff(x: np.ndarray) -> float:
+    if len(x) < 2:
+        return np.nan
+    return float(np.mean(np.abs(np.diff(x))))
+
+
+# All typology metrics, in order
+METRICS = [
+    ("hurst",              _hurst),
+    ("perm_entropy",       _perm_entropy),
+    ("sample_entropy",     _sample_entropy),
+    ("lyapunov_proxy",     _lyapunov_proxy),
+    ("spectral_flatness",  _spectral_flatness),
+    ("kurtosis",           _kurtosis),
+    ("cv",                 _cv),
+    ("range_norm",         _range_norm),
+    ("zero_crossing_rate", _zero_crossing_rate),
+    ("trend_strength",     _trend_strength),
+    ("mean_abs_diff",      _mean_abs_diff),
+]
+
+METRIC_NAMES = [name for name, _ in METRICS]
+
+
+# ── Per-window computation ──────────────────────────────────────
+
+def compute_window_typology(values: np.ndarray) -> dict:
+    """Compute all typology metrics for a single window of data."""
+    result = {}
+    for name, fn in METRICS:
+        try:
+            result[name] = fn(values)
+        except Exception:
+            result[name] = np.nan
+    return result
 
 
 def _compute_single_signal(
@@ -180,27 +266,33 @@ def _compute_single_signal(
 ) -> List[Dict[str, Any]]:
     """Compute typology metrics for all windows of one signal.
 
-    Args:
-        signal_id: Signal identifier.
-        signal_data: 1D numpy array of signal values (sorted by signal_0).
-        signal_0_data: 1D numpy array of signal_0 values.
-        system_window: System window size in samples.
-        system_stride: System stride in samples.
-        cohort: Cohort identifier.
-
-    Returns:
-        List of row dicts, one per window.
+    Returns list of row dicts, one per window.
     """
+    n = len(signal_data)
     rows = []
     window_id = 0
 
-    for window_end in range(system_window - 1, len(signal_data), system_stride):
+    if n < system_window:
+        # Signal shorter than one window: compute on entire signal
+        metrics = compute_window_typology(signal_data)
+        rows.append({
+            'window_id': 0,
+            'signal_id': signal_id,
+            'cohort': cohort,
+            'signal_0_start': float(signal_0_data[0]),
+            'signal_0_end': float(signal_0_data[-1]),
+            'signal_0_center': (float(signal_0_data[0]) + float(signal_0_data[-1])) / 2,
+            'n_obs': n,
+            **metrics,
+        })
+        return rows
+
+    for window_end in range(system_window - 1, n, system_stride):
         window_start = max(0, window_end - system_window + 1)
         window_data = signal_data[window_start:window_end + 1]
+        metrics = compute_window_typology(window_data)
 
-        metrics = _compute_window_metrics(window_data)
-
-        row = {
+        rows.append({
             'window_id': window_id,
             'signal_id': signal_id,
             'cohort': cohort,
@@ -208,13 +300,63 @@ def _compute_single_signal(
             'signal_0_end': float(signal_0_data[window_end]),
             'signal_0_center': (float(signal_0_data[window_start]) + float(signal_0_data[window_end])) / 2,
             'n_obs': len(window_data),
-        }
-        row.update(metrics)
-        rows.append(row)
+            **metrics,
+        })
         window_id += 1
 
     return rows
 
+
+# ── Summary: per-signal aggregation ─────────────────────────────
+
+def _summarize_windows(windows_df: pl.DataFrame) -> pl.DataFrame:
+    """Summarize per-window metrics into per-signal typology_vector.
+
+    For each metric: mean, std, cv, varies (bool: cv > threshold).
+    Pure math on the window data. Not interpretation.
+
+    Returns one row per (signal_id, cohort).
+    """
+    group_cols = ['signal_id']
+    if 'cohort' in windows_df.columns:
+        group_cols.append('cohort')
+
+    # Available metrics (intersect with columns)
+    metrics = [m for m in METRIC_NAMES if m in windows_df.columns]
+
+    agg_exprs = [pl.len().alias('n_windows')]
+
+    for m in metrics:
+        col = pl.col(m)
+        mean_expr = col.mean()
+        std_expr = col.std()
+
+        agg_exprs.append(mean_expr.alias(f'{m}_mean'))
+        agg_exprs.append(std_expr.alias(f'{m}_std'))
+
+    result = windows_df.group_by(group_cols).agg(agg_exprs)
+
+    # Compute CV and varies as derived columns (can't do abs(mean) inside agg easily)
+    for m in metrics:
+        mean_col = f'{m}_mean'
+        std_col = f'{m}_std'
+        cv_col = f'{m}_cv'
+        varies_col = f'{m}_varies'
+
+        result = result.with_columns(
+            pl.when(pl.col(mean_col).abs() > 1e-10)
+            .then(pl.col(std_col) / pl.col(mean_col).abs())
+            .otherwise(pl.col(std_col))  # absolute variation when mean is near zero
+            .alias(cv_col)
+        )
+        result = result.with_columns(
+            (pl.col(cv_col) > _CV_THRESHOLD).alias(varies_col)
+        )
+
+    return result
+
+
+# ── Stage entry point ───────────────────────────────────────────
 
 def run(
     observations_path: str,
@@ -223,7 +365,11 @@ def run(
     verbose: bool = True,
 ) -> pl.DataFrame:
     """
-    Run per-window typology vector computation.
+    Run Stage 00a: Typology Vector.
+
+    Writes two files:
+      - typology_windows.parquet (per-window metrics)
+      - typology_vector.parquet  (per-signal summary)
 
     Args:
         observations_path: Path to observations.parquet.
@@ -232,12 +378,13 @@ def run(
         verbose: Print progress.
 
     Returns:
-        DataFrame with per-window typology metrics.
+        typology_windows DataFrame (per-window metrics).
     """
     if verbose:
         print("=" * 70)
         print("STAGE 00a: TYPOLOGY VECTOR")
         print("Per-window typology metrics (11 measures)")
+        print(f"  pmtvs: {'accelerated' if _HAS_PMTVS else 'fallback (numpy/scipy)'}")
         print("=" * 70)
 
     if manifest is None:
@@ -267,33 +414,21 @@ def run(
                 cohort_df = sig_df.filter(pl.col('cohort') == cohort).sort('signal_0')
                 signal_data = cohort_df['value'].to_numpy()
                 signal_0_data = cohort_df['signal_0'].to_numpy()
-                if len(signal_data) >= system_window:
-                    tasks.append((sig_id, signal_data, signal_0_data, cohort))
+                tasks.append((sig_id, signal_data, signal_0_data, cohort))
         else:
             sorted_df = sig_df.sort('signal_0')
             signal_data = sorted_df['value'].to_numpy()
             signal_0_data = sorted_df['signal_0'].to_numpy()
-            if len(signal_data) >= system_window:
-                tasks.append((sig_id, signal_data, signal_0_data, ''))
+            tasks.append((sig_id, signal_data, signal_0_data, ''))
 
     if verbose:
-        print(f"Tasks: {len(tasks)} (signal × cohort combinations with >= {system_window} samples)")
+        print(f"Tasks: {len(tasks)} (signal x cohort combinations)")
 
     if not tasks:
-        empty_df = pl.DataFrame(schema={
-            'window_id': pl.UInt32, 'signal_id': pl.Utf8, 'cohort': pl.Utf8,
-            'signal_0_start': pl.Float64, 'signal_0_end': pl.Float64,
-            'signal_0_center': pl.Float64, 'n_obs': pl.UInt32,
-            'hurst': pl.Float64, 'perm_entropy': pl.Float64,
-            'sample_entropy': pl.Float64, 'lyapunov_proxy': pl.Float64,
-            'spectral_flatness': pl.Float64, 'kurtosis': pl.Float64,
-            'cv': pl.Float64, 'mean_abs_diff': pl.Float64,
-            'range_norm': pl.Float64, 'zero_crossing_rate': pl.Float64,
-            'trend_strength': pl.Float64,
-        })
-        write_output(empty_df, data_path, 'typology_vector', verbose=verbose)
-        return empty_df
+        _write_empty(data_path, verbose)
+        return pl.DataFrame()
 
+    # Parallel computation
     if len(tasks) == 1:
         sig_id, signal_data, signal_0_data, cohort = tasks[0]
         all_rows = _compute_single_signal(
@@ -315,30 +450,48 @@ def run(
         print(f"  {len(all_rows):,} window rows computed")
 
     if not all_rows:
-        empty_df = pl.DataFrame(schema={
-            'window_id': pl.UInt32, 'signal_id': pl.Utf8, 'cohort': pl.Utf8,
-            'signal_0_start': pl.Float64, 'signal_0_end': pl.Float64,
-            'signal_0_center': pl.Float64, 'n_obs': pl.UInt32,
-            'hurst': pl.Float64, 'perm_entropy': pl.Float64,
-            'sample_entropy': pl.Float64, 'lyapunov_proxy': pl.Float64,
-            'spectral_flatness': pl.Float64, 'kurtosis': pl.Float64,
-            'cv': pl.Float64, 'mean_abs_diff': pl.Float64,
-            'range_norm': pl.Float64, 'zero_crossing_rate': pl.Float64,
-            'trend_strength': pl.Float64,
-        })
-        write_output(empty_df, data_path, 'typology_vector', verbose=verbose)
-        return empty_df
+        _write_empty(data_path, verbose)
+        return pl.DataFrame()
 
-    # Cast to correct types
-    df = pl.DataFrame(all_rows, infer_schema_length=None)
-    df = df.cast({
-        'window_id': pl.UInt32,
-        'n_obs': pl.UInt32,
-    })
+    # Build windows DataFrame
+    windows_df = pl.DataFrame(all_rows, infer_schema_length=None)
+    windows_df = windows_df.cast({'window_id': pl.UInt32, 'n_obs': pl.UInt32})
 
-    write_output(df, data_path, 'typology_vector', verbose=verbose)
+    # Summarize into per-signal vector
+    vector_df = _summarize_windows(windows_df)
+
+    # Write both outputs
+    write_output(windows_df, data_path, 'typology_windows', verbose=verbose)
+    write_output(vector_df, data_path, 'typology_vector', verbose=verbose)
 
     if verbose:
-        print(f"\n  Typology vector: {df.height} rows × {df.width} columns")
+        n_varies = 0
+        varies_cols = [c for c in vector_df.columns if c.endswith('_varies')]
+        if varies_cols:
+            for c in varies_cols:
+                n_varies += vector_df[c].sum()
+        print(f"\n  Windows: {windows_df.height} rows x {windows_df.width} columns")
+        print(f"  Vector:  {vector_df.height} signals, {n_varies} metric-signal pairs vary (CV > {_CV_THRESHOLD})")
 
-    return df
+    return windows_df
+
+
+def _write_empty(data_path: str, verbose: bool) -> None:
+    """Write empty schema files when no data."""
+    window_schema = {
+        'window_id': pl.UInt32, 'signal_id': pl.Utf8, 'cohort': pl.Utf8,
+        'signal_0_start': pl.Float64, 'signal_0_end': pl.Float64,
+        'signal_0_center': pl.Float64, 'n_obs': pl.UInt32,
+    }
+    for m in METRIC_NAMES:
+        window_schema[m] = pl.Float64
+
+    vector_schema = {'signal_id': pl.Utf8, 'cohort': pl.Utf8, 'n_windows': pl.UInt32}
+    for m in METRIC_NAMES:
+        vector_schema[f'{m}_mean'] = pl.Float64
+        vector_schema[f'{m}_std'] = pl.Float64
+        vector_schema[f'{m}_cv'] = pl.Float64
+        vector_schema[f'{m}_varies'] = pl.Boolean
+
+    write_output(pl.DataFrame(schema=window_schema), data_path, 'typology_windows', verbose=verbose)
+    write_output(pl.DataFrame(schema=vector_schema), data_path, 'typology_vector', verbose=verbose)

@@ -545,19 +545,20 @@ def run(
                 br_dest.parent.mkdir(parents=True, exist_ok=True)
                 br_cohort.write_parquet(str(br_dest))
 
-        tv_path = _out(output_dir, 'typology_vector.parquet')
-        if Path(tv_path).exists():
-            tv_all = pl.read_parquet(tv_path)
-            has_tv_cohort = 'cohort' in tv_all.columns
-            for cohort, info in cohort_map.items():
-                cohort_output = Path(info['output_dir'])
-                if has_tv_cohort:
-                    tv_cohort = tv_all.filter(pl.col('cohort') == cohort)
-                else:
-                    tv_cohort = tv_all
-                tv_dest = cohort_output / STAGE_DIRS.get('typology_vector', '') / 'typology_vector.parquet'
-                tv_dest.parent.mkdir(parents=True, exist_ok=True)
-                tv_cohort.write_parquet(str(tv_dest))
+        for tv_name in ('typology_windows', 'typology_vector'):
+            tv_path = _out(output_dir, f'{tv_name}.parquet')
+            if Path(tv_path).exists():
+                tv_all = pl.read_parquet(tv_path)
+                has_tv_cohort = 'cohort' in tv_all.columns
+                for cohort, info in cohort_map.items():
+                    cohort_output = Path(info['output_dir'])
+                    if has_tv_cohort:
+                        tv_cohort = tv_all.filter(pl.col('cohort') == cohort)
+                    else:
+                        tv_cohort = tv_all
+                    tv_dest = cohort_output / STAGE_DIRS.get(tv_name, '') / f'{tv_name}.parquet'
+                    tv_dest.parent.mkdir(parents=True, exist_ok=True)
+                    tv_cohort.write_parquet(str(tv_dest))
 
         if verbose:
             print(f"Phase 1: {n_cohorts} cohorts x {len(parallel_stages)} stages on {effective_workers} workers")

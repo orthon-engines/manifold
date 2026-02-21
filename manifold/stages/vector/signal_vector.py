@@ -441,12 +441,12 @@ def _audit_manifest_engines(
 
 
 def load_typology_vector(data_path: str) -> Optional[pl.DataFrame]:
-    """Load typology_vector.parquet from data_path via reader.
+    """Load typology_windows.parquet (per-window metrics) for engine gating.
 
     Returns None if not found (backward compat: no gating applied).
     """
     from manifold.io.reader import load_output
-    return load_output(data_path, 'typology_vector')
+    return load_output(data_path, 'typology_windows')
 
 
 def evaluate_engine_gates(
