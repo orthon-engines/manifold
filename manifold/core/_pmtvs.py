@@ -82,6 +82,7 @@ if _HAS_ALL:
         spectral_centroid,
         spectral_bandwidth,
         spectral_entropy,
+        spectral_flatness,
         hilbert_transform,
         envelope,
         # individual
@@ -99,6 +100,8 @@ if _HAS_ALL:
         zscore_normalize,
         condition_number,
         effective_dimension,
+        # statistics
+        kurtosis,
         # stat_tests
         adf_test,
     )
@@ -170,3 +173,5 @@ else:
 
     # These don't exist in 0.1.4 at all — sentinel to trigger _compat usage
     renyi_entropy = None  # noqa: F811
+    spectral_flatness = None  # noqa: F811
+    kurtosis = None  # noqa: F811

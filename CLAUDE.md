@@ -154,6 +154,8 @@ All output goes to `<prefix>_output/` matching the observations file prefix
 
 | File | Stage | Description |
 |------|-------|-------------|
+| typology_windows.parquet | 00a | Per-window typology metrics (hurst, entropy, spectral, trend) |
+| typology_vector.parquet | 00a | Per-signal typology summary (mean, std, cv, varies) |
 | signal_vector.parquet | 01 | Per-signal windowed features (FFT, entropy, hurst, kurtosis...) |
 | signal_geometry.parquet | 05 | Distance-to-centroid, coherence, projections |
 | signal_stability.parquet | 33 | Hilbert + Wavelet analysis |
@@ -194,6 +196,9 @@ All output goes to `<prefix>_output/` matching the observations file prefix
 | system_cohort_positions.parquet | 26 | Cohort loadings on PCs |
 | system_pairwise.parquet | 27 | Pairwise cohort comparison |
 | system_information_flow.parquet | 28 | Granger at system scale |
+| trajectory_signatures.parquet | 32 | Per-cohort geometric fingerprint (joined upstream features) |
+| trajectory_library.parquet | 32 | DTW-clustered trajectory types (medoids, silhouette) |
+| trajectory_match.parquet | 32 | Per-cohort nearest-cluster match + confidence |
 
 #### `system/system_dynamics/` — "How is the fleet evolving over time?"
 
@@ -216,11 +221,11 @@ Stages live in `manifold/stages/<group>/` and run in dependency order:
 
 | Group | Stages | What it computes |
 |-------|--------|-----------------|
-| **vector/** | 00, 01, 33 | Per-signal features (breaks, signal_vector, stability) |
+| **vector/** | 00a, 00, 01, 33 | Per-signal features (typology, breaks, signal_vector, stability) |
 | **geometry/** | 02, 03, 03b, 05, 07 | State vectors, eigendecomposition, signal geometry, dynamics |
 | **dynamics/** | 08, 08_lyapunov, 09a, 15, 17, 21, 22, 23, 36 | FTLE, Lyapunov, velocity, topology, thermodynamics |
 | **information/** | 06, 10 | Pairwise coupling, Granger causality, transfer entropy |
-| **energy/** | 25, 26, 27, 28, 30, 31 | Cohort vectors, system geometry, fleet-scale analysis |
+| **energy/** | 25, 26, 27, 28, 30, 31, 32 | Cohort vectors, system geometry, fleet-scale analysis, trajectory signatures |
 
 ---
 
